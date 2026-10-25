@@ -349,6 +349,8 @@ button .ico:only-child, .iconbtn .ico { margin-right: 0; }
 .gnode.input .head { background: #8bc96a; }
 .lg.py { background: #f2b84c; }
 .lg.input { background: #8bc96a; }
+.shared-children { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.shared-children label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .param-info span { display: flex; flex-wrap: wrap; gap: 4px; }
 .param-info code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 .src summary { cursor: pointer; font-size: 12px; color: var(--muted); }

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .definitions import DefinitionError, DefinitionStore, entry_node, merge_tools, node_entry
 from .icons import IconError, IconStore
+from .shared import has_section as shared_has_section
 from .pynodes import (IDENT_RE, MAX_VALUE, PY_TYPES, binding_errors, build_function, input_errors, is_function_style, params_from_inputs,
                       parse_function, parse_input)
 
@@ -233,6 +234,7 @@ class Registry:
         self._items = {}
         self._load()
         self.sync_personas()   # 手で編集した personality.md を、定義の節へ反映する（ADR 0046）
+        self.sync_shared()     # 親の Shared Principles を、使う子の定義へ反映する（ADR 0047）
 
     # ---- 永続化 ----
     def _load(self):
@@ -457,6 +459,8 @@ class Registry:
             if cur['kind'] == 'suborchestrator' and was_top != self._is_top(e) and (definition or {}).get('kind') == 'agent-md':
                 self._delegate_entry(e['name'], e['description'], remove=was_top)   # 入れ子になったら委任先から外し、猫神さま直下に戻ったら載せる
             self._save()
+            if body.get('parent_id') != cur.get('parent_id'):
+                self.sync_shared()   # 親が変わった子は、新しい親の共通プロンプトに合わせる（親がサブオーケストレーターでなければ外す）
             return dict(e)
 
     def delete(self, eid, cascade=False):
@@ -485,6 +489,7 @@ class Registry:
                 if e and self._is_top(e) and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self._delegate_entry(e['name'], remove=True)   # 定義ファイルごと消えるものだけ。台帳だけを外すときは委任設定を残す
             self._save()
+            self.sync_shared()   # 親を消した子の節を外す
             return ids
 
     # ---- ツール（ノードグラフでエージェントに接続する対象）----
@@ -787,19 +792,105 @@ class Registry:
         r['tools_other'] = unmapped_entries(r['tools'], self._catalog())   # グラフで操作できない項目（読み取り専用で表示）
         return r
 
+    # ---- Shared Principles（ADR 0047）----
+    def _is_sub_md(self, e):
+        return bool(e) and e['kind'] == 'suborchestrator' and (e.get('definition') or {}).get('kind') == 'agent-md'
+
+    def _shared_children(self, e):
+        return [c for c in self._items.values() if c.get('parent_id') == e['id'] and c['kind'] in ('agent', 'subagent', 'suborchestrator')]
+
+    def get_shared(self, eid):
+        """Shared Principles の画面用データ。サブオーケストレーターなら本文と直下の子の一覧、サブオーケストレーターの子なら使う／使わないの状態"""
+        from . import shared
+        e = self.get(eid)
+        parent = self._items.get(e.get('parent_id'))
+        out = {'name': e['name']}
+        if self._is_sub_md(e):
+            out.update(text=shared.read_file(self.project_dir, e['name']), children=[
+                {'id': c['id'], 'name': c['name'], 'kind': c['kind'], 'eligible': (c.get('definition') or {}).get('kind') == 'agent-md',
+                 'use': self._uses_shared(c)} for c in sorted(self._shared_children(e), key=lambda c: c['name'])])
+        if self._is_sub_md(parent):
+            out['as_child'] = {'parent': parent['name'], 'parent_text': shared.read_file(self.project_dir, parent['name']),
+                               'eligible': (e.get('definition') or {}).get('kind') == 'agent-md', 'use': self._uses_shared(e)}
+        if 'text' not in out and 'as_child' not in out:
+            raise ValidationError('Shared Principles を使えるのは、サブオーケストレーターと、その直下の子だけ')
+        return out
+
+    def _uses_shared(self, e):
+        try:
+            return (e.get('definition') or {}).get('kind') == 'agent-md' and shared_has_section(self.get_definition(e['id'])['prompt'])
+        except ValidationError:
+            return False
+
+    def set_shared(self, eid, text):
+        """親の共通プロンプトを保存し、使っている子の定義へ反映する"""
+        from . import shared
+        with self._lock:
+            e = self.get(eid)
+            if not self._is_sub_md(e):
+                raise ValidationError('共通プロンプトを持てるのは、定義ファイルのあるサブオーケストレーターだけ')
+            try:
+                shared.write_file(self.project_dir, e['name'], text, self.defs)
+            except shared.SharedError as ex:
+                raise ValidationError(str(ex))
+            self.sync_shared()
+            return self.get_shared(eid)
+
+    def set_use_shared(self, eid, use):
+        """子が、親の Shared Principles を使うかを切り替える（使うなら、定義の本文に節を足す）"""
+        from . import shared
+        with self._lock:
+            e = self.get(eid)
+            parent = self._items.get(e.get('parent_id'))
+            if not self._is_sub_md(parent):
+                raise ValidationError('親がサブオーケストレーター（定義ファイルあり）のときだけ使える')
+            if (e.get('definition') or {}).get('kind') != 'agent-md':
+                raise ValidationError('定義ファイルのない担当には渡せない')
+            prompt = self.get_definition(eid)['prompt']
+            text = shared.read_file(self.project_dir, parent['name']) if use else None
+            new = shared.apply(prompt, text, parent['name'])
+            if new.strip() != prompt.strip():
+                self.set_prompt(eid, new)
+            return self.get_shared(eid)
+
+    def sync_shared(self):
+        """節を持つ子の定義を、今の親の共通プロンプトに合わせる。親が変わった・いなくなった子は、節を外す"""
+        from . import shared
+        with self._lock:
+            for e in list(self._items.values()):
+                if (e.get('definition') or {}).get('kind') != 'agent-md':
+                    continue
+                try:
+                    prompt = self.get_definition(e['id'])['prompt']
+                    if not shared.has_section(prompt):
+                        continue
+                    parent = self._items.get(e.get('parent_id'))
+                    new = shared.apply(prompt, shared.read_file(self.project_dir, parent['name']) if self._is_sub_md(parent) else None,
+                                       parent['name'] if parent else '')
+                    if new.strip() != prompt.strip():
+                        self.set_prompt(e['id'], new)
+                except ValidationError:
+                    pass   # 壊れた定義は、その担当だけ飛ばす
+
     def _discard_persona(self, name):
         from . import personality
-        d = personality.persona_file(self.project_dir, name).parent
-        if d.is_dir():
-            self.defs.trash.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(d), str(self.defs.trash / f"persona__{name}.{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"))
+        from . import shared
+        stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+        for d, tag in ((personality.persona_file(self.project_dir, name).parent, 'persona'), (shared.shared_file(self.project_dir, name).parent, 'shared')):
+            if d.is_dir():
+                self.defs.trash.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(d), str(self.defs.trash / f'{tag}__{name}.{stamp}'))
 
     def _move_persona(self, old, new):
         """名前の変更に合わせて、personality.md のフォルダも移す（移せなければそのまま。次の保存で新しい名前に作られる）"""
-        from . import personality
+        from . import personality, shared
         src, dst = personality.persona_file(self.project_dir, old).parent, personality.persona_file(self.project_dir, new).parent
         if src.is_dir() and not dst.exists():
             shutil.move(str(src), str(dst))
+        s2, d2 = shared.shared_file(self.project_dir, old).parent, shared.shared_file(self.project_dir, new).parent
+        if s2.is_dir() and not d2.exists():
+            shutil.move(str(s2), str(d2))
+        self.sync_shared()
 
     def _persona_target(self, eid):
         e = self.get(eid)
