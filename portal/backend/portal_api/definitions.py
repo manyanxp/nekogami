@@ -25,6 +25,7 @@ TOOL_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_*.-]{0,127}(\([A-Za-z0-9_, .*-]{0,200
 ROLES = ('suborchestrator', 'agent', 'subagent')
 # 書き込み・実行ができるツール。新しく足すときは確認（allow_dangerous）が要る（ADR 0002 の読み取り中心の方針）
 DANGEROUS_TOOLS = ('Bash', 'Write', 'Edit', 'NotebookEdit')
+DIR_PREFIX = 'dir-'   # ディレクトリのノードは、Agent Console が MCP サーバー `dir-<名前>` として公開する（ADR 0037）
 MAX_PROMPT = 50_000
 KEY_RE = re.compile(r'^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$')
 # 新規作成時の既定ツール（読み取り中心。tools を省略すると全ツールを継承してしまうので、必ず明示する）
@@ -129,11 +130,16 @@ def entry_node(entry):
     """tools の 1 項目が属するノード名。MCP は `mcp__サーバー__…` → サーバー名、`Agent(a,b)` → Agent。"""
     base = entry.split('(')[0]
     if base.startswith('mcp__'):
-        return base.split('__')[1] if base.count('__') >= 1 and base.split('__')[1] else None
+        server = base.split('__')[1] if base.count('__') >= 1 else ''
+        if server.startswith(DIR_PREFIX) and len(server) > len(DIR_PREFIX):
+            return server[len(DIR_PREFIX):]   # ディレクトリのノード（`mcp__dir-<名前>__*`）。ノード名は <名前>
+        return server or None
     return base
 
 
 def node_entry(name, kind):
+    if kind == 'directory':
+        return f'mcp__{DIR_PREFIX}{name}__*'
     return f'mcp__{name}__*' if kind == 'mcp' else name
 
 

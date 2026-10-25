@@ -21,6 +21,7 @@
 | `azure-sage/` | `azure-researcher`（haiku）/ `azure-inventory`（haiku・読み取りのみ）/ `azure-reviewer`（opus）/ `azure-architect`（opus） | Azure 全般（Foundry・Agent 365 含む）の調査・精査・開発提案。詳細は下の「Azure Sage」 |
 | `nekogamisama/` | `neko-chat` | おしゃべり担当（雑談・使い方・自己紹介）。[ADR 0026](docs/adr/0026-chatbot-agent-and-slash-commands.md) |
 | `news-sub/` | `news-agent` | 日経・海外のニュース収集（AI 関連） |
+| `nekogamisama/` | `py-analyst` | Python のコードを書いて実行し、データを分析する。管理ページで「Python 実行」を許したディレクトリのノードをつなぐと使える。ネットワークなし、30 秒まで。[ADR 0038](docs/adr/0038-python-execution-sandbox.md) |
 
 階層は 猫神さま → サブオーケストレーター → エージェント（3 層まで）。配置の規則は `.claude/agents/<親の名前>/<名前>.md`（[ADR 0016](docs/adr/0016-agent-definition-files.md)）。
 

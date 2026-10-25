@@ -14,6 +14,9 @@ import { buildTargets, publicTargets } from './targets.mjs';
 import { readIds } from './ids.mjs';
 import { routeOf } from './route.mjs';
 import { readTheme } from './theme.mjs';
+import { z } from 'zod';
+import { DIR_PREFIX, buildDirServers, checkDirAccess, loadDirNodes } from './fs-tools.mjs';
+import { runPython } from './py-exec.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(HERE, '..');
@@ -21,6 +24,10 @@ const PORT = Number(process.env.TRACE_PORT || 4317);
 const REGISTRY_FILE = process.env.REGISTRY_FILE || path.join(PROJECT_DIR, 'portal', 'data', 'registry.json');   // ポータルの台帳（担当 UUID）
 const THEME_FILE = process.env.THEME_FILE || path.join(PROJECT_DIR, 'portal', 'data', 'theme.json');   // ポータルの管理ページで設定したテーマ
 const HOST = process.env.TRACE_HOST || '127.0.0.1';
+// ディレクトリのノード（ADR 0037）が指す作業領域。ノードの path は、ここからの相対パス
+const FS_ROOT = path.resolve(process.env.FS_ROOT || path.join(PROJECT_DIR, 'workspace'));
+// Python の実行（ADR 0038）のジョブ置き場。実行役（py-sandbox）と共有する
+const JOBS_DIR = path.resolve(process.env.SANDBOX_JOBS || path.join(PROJECT_DIR, 'sandbox', 'jobs'));
 const CHAT_MODEL = process.env.CHAT_MODEL || undefined; // 未指定なら .claude/settings.json の model
 const ALLOW_AZURE_MCP = process.env.ALLOW_AZURE_MCP !== '0';
 // 既定の相手を決める従来の環境変数（PROJECT_DIR からの相対）。'.' = Azure Sage、'nekogamisama' = 猫神さま。CHAT_TARGET=<名前> でも指定できる
@@ -54,6 +61,26 @@ function loadAgentModels() {
   return map;
 }
 let agentModels = loadAgentModels();
+
+/** 担当（エージェント定義）の名前 → 定義ファイルの tools（無ければ null = 全ツールを継承）。ディレクトリへの接続の確認に使う */
+function loadAgentTools() {
+  const dir = path.join(PROJECT_DIR, '.claude', 'agents');
+  const map = {};
+  try {
+    for (const f of fs.readdirSync(dir, { recursive: true })) {
+      if (!f.endsWith('.md') || f.split(path.sep).some((p) => p.startsWith('.'))) continue;
+      const fm = fs.readFileSync(path.join(dir, f), 'utf8').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      const name = fm?.[1].match(/^name:\s*(.+)$/m)?.[1].trim();
+      if (!name) continue;
+      const tools = fm[1].match(/^tools:\s*(.*)$/m)?.[1];
+      map[name] = tools === undefined ? null : tools.split(',').map((t) => t.trim()).filter(Boolean);
+    }
+  } catch { /* agents フォルダがなくても動く */ }
+  return map;
+}
+// 実行中の担当（サブエージェント）の ID → 担当の名前。SubagentStart のフックで覚える（canUseTool が渡す agentID から、呼んだ担当を知るため）
+const agentTypeById = new Map();
+const rememberAgent = (id, type) => { agentTypeById.set(id, type); if (agentTypeById.size > 1000) agentTypeById.delete(agentTypeById.keys().next().value); };
 
 // ---------- SSE ブロードキャスト ----------
 const clients = new Set();
@@ -127,7 +154,7 @@ const SAFE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Ag
 const DOC_DIRS = ['reports', 'research'];
 const WRITABLE_DIRS = ['reports', 'research'].map((d) => path.join(PROJECT_DIR, d) + path.sep);
 
-async function canUseTool(toolName, input, target, user) {
+async function canUseTool(toolName, input, target, user, opts) {
   let allowed = false;
   let reason = '';
   if (SAFE_TOOLS.has(toolName) || toolName.startsWith('mcp__microsoft-learn__')) {
@@ -135,6 +162,11 @@ async function canUseTool(toolName, input, target, user) {
   } else if (toolName.startsWith('mcp__azure__')) {
     allowed = ALLOW_AZURE_MCP;
     reason = allowed ? '' : 'Azure MCP はこのサーバーで無効化されています (ALLOW_AZURE_MCP=0)';
+  } else if (toolName.startsWith(`mcp__${DIR_PREFIX}`)) {   // ディレクトリのノード。権限と、呼んだ担当の接続の両方を確かめる
+    const callerName = opts?.agentID ? agentTypeById.get(opts.agentID) : chatTargets().get(target)?.agent;
+    const r = checkDirAccess({ toolName, nodes: loadDirNodes(REGISTRY_FILE), callerName, callerTools: loadAgentTools()[callerName] });
+    allowed = r.ok;
+    reason = r.reason || '';
   } else if (toolName === 'Write' || toolName === 'Edit') {
     const p = path.resolve(PROJECT_DIR, String(input?.file_path || ''));
     allowed = WRITABLE_DIRS.some((d) => p.startsWith(d));
@@ -211,7 +243,8 @@ async function runChat(text, target, user) {
         model: CHAT_MODEL,
         includePartialMessages: true,
         abortController: ac,
-        canUseTool: (n, i) => canUseTool(n, i, target, user),
+        mcpServers: buildDirServers({ sdk, z, nodes: loadDirNodes(REGISTRY_FILE), root: FS_ROOT, run: (box, code) => runPython({ box, code, jobsDir: JOBS_DIR }) }),   // 権限のある操作だけ公開する
+        canUseTool: (n, i, o) => canUseTool(n, i, target, user, o),
       },
     });
     for await (const m of q) handleSdkMessage(m, target, user);
@@ -270,7 +303,11 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'POST' && url.pathname === '/hooks') {
       const body = await readBody(req);
-      try { send(normalizeHook(JSON.parse(body))); } catch { /* 壊れた入力は無視 */ }
+      try {
+        const hook = JSON.parse(body);
+        if (hook.hook_event_name === 'SubagentStart' && hook.agent_id && hook.agent_type) rememberAgent(hook.agent_id, hook.agent_type);
+        send(normalizeHook(hook));
+      } catch { /* 壊れた入力は無視 */ }
       res.writeHead(200); return res.end(); // 空ボディ = 何も変更しない
     }
     if (req.method === 'GET' && url.pathname === '/events') {

@@ -1,5 +1,7 @@
 import http.server
 import json
+import os
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -189,6 +191,53 @@ class RegistryTest(Base):
         self.reg.update(x['id'], {'tool_ids': ids, 'allow_dangerous': True})
         self.assertIn('Bash', self._agent_text('.claude/agents/x.md'))
 
+    def test_directory_nodes(self):
+        """ディレクトリのノード: 場所の検証、権限（既定はすべてオフ）、担当への接続は定義ファイルの tools に反映（ADR 0037）"""
+        self.reg.sync_builtin('http://x')
+        x = next(e for e in self.reg.list() if e['name'] == 'azure-x')
+        d = self.reg.create_tool({'name': 'docs', 'kind': 'directory', 'path': 'notes/docs/'})
+        self.assertEqual((d['path'], d['perms']), ('notes/docs', {'list': False, 'read': False, 'write': False, 'delete': False, 'exec': False}))
+        for bad in ('', '..', '../x', '/etc', 'a/../b', '.hidden', 'a//b', 'a b', 'x' * 65, '/'.join(['a'] * 9), None, 5):
+            with self.assertRaises(ValidationError, msg=repr(bad)):
+                self.reg.create_tool({'name': 'bad', 'kind': 'directory', 'path': bad})
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'bad2', 'kind': 'directory', 'path': 'a', 'perms': {'sudo': True}})
+        for bad_name in ('my.docs', 'my_docs', 'a__b'):   # MCP のサーバー名にする。記号は不可
+            with self.assertRaises(ValidationError, msg=bad_name):
+                self.reg.create_tool({'name': bad_name, 'kind': 'directory', 'path': 'a'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(next(t['id'] for t in self.reg.list_tools() if t['name'] == 'Read'), {'path': 'a'})   # 他の種類は不可
+        # 参照・読み込みだけなら確認なしで接続でき、定義ファイルの tools に mcp__dir-docs__* が入る
+        self.reg.update_tool(d['id'], {'perms': {'list': True, 'read': True}})
+        self.reg.update(x['id'], {'tool_ids': x['tool_ids'] + [d['id']]})
+        self.assertIn('mcp__dir-docs__*', self._agent_text('.claude/agents/x.md'))
+        self.assertIn(d['id'], self.reg.get(x['id'])['tool_ids'])
+        # 書き込み・削除つきのディレクトリを新しく足すには確認が要る。失敗したらファイルも台帳も変わらない
+        w = self.reg.create_tool({'name': 'out', 'kind': 'directory', 'path': 'out', 'perms': {'write': True}})
+        ids = self.reg.get(x['id'])['tool_ids'] + [w['id']]
+        with self.assertRaises(ValidationError):
+            self.reg.update(x['id'], {'tool_ids': ids})
+        self.assertNotIn('dir-out', self._agent_text('.claude/agents/x.md'))
+        self.reg.update(x['id'], {'tool_ids': ids, 'allow_dangerous': True})
+        self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))
+        # Python 実行（exec）も、書き込み・削除と同じく確認が要る
+        e = self.reg.create_tool({'name': 'calc', 'kind': 'directory', 'path': 'calc', 'perms': {'read': True, 'exec': True}})
+        with self.assertRaises(ValidationError):
+            self.reg.update(x['id'], {'tool_ids': ids + [e['id']]})
+        self.reg.delete_tool(e['id'])
+        # 台帳に戻しても、ディレクトリのノードとの対応が保たれる（再取り込み）
+        self.reg.sync_builtin('http://x')
+        self.assertEqual(set(self.reg.get(x['id'])['tool_ids']) >= {d['id'], w['id']}, True)
+        # ノードを消すと、担当との接続も外れる
+        self.reg.delete_tool(d['id'])
+        self.assertNotIn(d['id'], self.reg.get(x['id'])['tool_ids'])
+        self.assertNotIn('dir-docs', self._agent_text('.claude/agents/x.md'))   # 定義ファイルからも外れる
+        # 同じ名前で作り直しても、確認なしでつながったりしない
+        again = self.reg.create_tool({'name': 'docs', 'kind': 'directory', 'path': 'other', 'perms': {'write': True}})
+        self.assertNotIn(again['id'], self.reg.get(x['id'])['tool_ids'])
+        self.assertNotIn('dir-docs', self._agent_text('.claude/agents/x.md'))
+        self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))   # 他のノードの接続は残る
+
     def test_create_claude_agents_and_tree(self):
         self.reg.sync_builtin('http://x')
         (self.root / 'nekogamisama').mkdir(exist_ok=True)
@@ -290,6 +339,17 @@ class RegistryTest(Base):
                           ('x', 'str')):
             with self.assertRaises(ValidationError, msg=str((name, bad))):
                 self.reg.delegation_put(name, bad)
+        # env と args（ローカル LLM の担当など。ADR 0039）: 許可リストにあるものだけ。指定がなければ今の値を保つ
+        env = {'ANTHROPIC_BASE_URL': 'http://ollama:11434', 'ANTHROPIC_MODEL': 'qwen3:8b', 'ANTHROPIC_API_KEY': ''}
+        args = ['--tools', 'Read,Glob,Grep', '--strict-mcp-config', '--max-turns', '8']
+        r = self.reg.delegation_put('side', {'type': 'session', 'dir': '../tools-dir', 'env': env, 'args': args})
+        self.assertEqual((r['env'], r['args']), (env, args))
+        r = self.reg.delegation_put('side', {'type': 'session', 'dir': '../tools-dir', 'description': '画面から編集'})
+        self.assertEqual((r['env'], r['args']), (env, args))
+        for bad in ({'env': {'PATH': '/tmp'}}, {'env': {'ANTHROPIC_MODEL': 'a b'}}, {'env': {'ANTHROPIC_MODEL': 'x;rm'}}, {'env': ['A']},
+                    {'args': ['--dangerously-skip-permissions']}, {'args': ['--tools']}, {'args': ['--tools', '--max-turns']}, {'args': ['--model', 'a b']}, {'args': 'x'}):
+            with self.assertRaises(ValidationError, msg=str(bad)):
+                self.reg.delegation_put('side', {'type': 'session', 'dir': '../tools-dir', **bad})
         self.reg.delegation_delete('side')
         with self.assertRaises(NotFound):
             self.reg.delegation_delete('side')
@@ -910,6 +970,41 @@ class AuthTest(Base):
         hello = {'kind': 'hello', 'runningChats': [{'target': chat.CHAT_AGENT, 'user': 'alice'}]}
         self.assertIn('"running": true', chat.filter_chat_event(line(hello), 'alice'))
         self.assertIn('"running": false', chat.filter_chat_event(line(hello), 'bob'))
+
+class DelegateScriptTests(unittest.TestCase):
+    """nekogamisama/bin/delegate.sh が、台帳の env / args を、許可リストの範囲で claude に渡す（ADR 0039）。"""
+
+    SCRIPT = Path(__file__).resolve().parents[3] / 'nekogamisama' / 'bin' / 'delegate.sh'
+
+    def run_script(self, entry, name='loc'):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            (root / 'bin').mkdir()
+            (root / 'bin' / 'delegate.sh').write_text(self.SCRIPT.read_text(encoding='utf-8'))
+            (root / 'bin' / 'delegate.sh').chmod(0o755)
+            (root / 'work').mkdir()
+            (root / 'suborchestrators.json').write_text(json.dumps({name: {'type': 'session', 'dir': 'work', **entry}}))
+            fake = root / 'fake-claude'
+            fake.write_text('#!/bin/sh\necho "model=$ANTHROPIC_MODEL key=[$ANTHROPIC_API_KEY] args=$*"; cat\n')
+            fake.chmod(0o755)
+            return subprocess.run([str(root / 'bin' / 'delegate.sh'), name, '依頼'], capture_output=True, text=True, timeout=30,
+                                  env={**os.environ, 'CLAUDE_BIN': str(fake)})
+
+    def test_env_and_args_are_passed(self):
+        r = self.run_script({'env': {'ANTHROPIC_MODEL': 'qwen3:8b', 'ANTHROPIC_API_KEY': ''}, 'args': ['--tools', 'Read,Glob', '--strict-mcp-config']})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, 'model=qwen3:8b key=[] args=-p --tools Read,Glob --strict-mcp-config\n依頼')
+
+    def test_plain_entry_still_works(self):
+        r = self.run_script({})
+        self.assertEqual((r.returncode, r.stdout), (0, 'model= key=[] args=-p\n依頼'))
+
+    def test_disallowed_values_are_refused(self):
+        for entry in ({'env': {'PATH': '/x'}}, {'env': {'ANTHROPIC_MODEL': 'a b'}}, {'args': ['--dangerously-skip-permissions']}, {'args': ['--tools']}):
+            r = self.run_script(entry)
+            self.assertNotEqual(r.returncode, 0, str(entry))
+            self.assertEqual(r.stdout, '', str(entry))   # claude は起動しない
+
 
 
 if __name__ == '__main__':

@@ -37,6 +37,12 @@ Azure Sage の設計判断と仕様の記録です。1 ファイル 1 判断、�
 | [0031](0031-nextjs-fastapi-split.md) | 画面を Next.js、ポータルの API を FastAPI にする（公開に向けた再構成） | Accepted |
 | [0032](0032-entity-icons.md) | エージェントのアイコン（変更・アップロード・既定） | Accepted |
 | [0033](0033-terminal-windows.md) | エージェントごとのターミナル窓（ポータル） | Accepted |
+| [0034](0034-frontend-backend-containers.md) | 画面と API を別コンテナにして、複数の PC から使う | Accepted |
+| [0035](0035-login-and-roles.md) | ログイン（ローカルアカウント）と管理者／利用者のロール | Accepted |
+| [0036](0036-trace-to-terminal-and-ui-icons.md) | トレースのパネルを廃止してターミナル窓に統合、UI アイコン | Accepted |
+| [0037](0037-directory-nodes-and-permissions.md) | ディレクトリのノードと権限（担当が読み書き・削除できる作業領域） | Accepted |
+| [0038](0038-python-execution-sandbox.md) | Python の生成・実行（実行役のコンテナと「Python 実行」権限） | Accepted |
+| [0039](0039-local-llm-agent.md) | ローカル LLM の担当（Ollama + qwen3:8b、別セッション型） | Accepted |
 
 ## 運用ルール
 

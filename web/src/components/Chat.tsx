@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Icon } from './Icon';
 import { api, streamChat } from '@/lib/api';
 import { helpText, matchCommands } from '@/lib/commands';
 import { newTrace, reduce, type LogLine, type Trace } from '@/lib/trace-model';
@@ -94,7 +95,7 @@ export function Chat({ onTrace, onNewRequest, nekoIcon = '/neko-goddess.png' }: 
         <span className="grip">⠿</span><strong>🐾 猫神さまとチャット</strong>
         <span className={`pill ${conn.ok ? 'ok' : 'ng'}`} title={conn.ok ? '' : 'Agent Console が動いているか確認してください'}>{conn.ok ? '接続中' : conn.why ? `切断: ${conn.why}` : '再接続中…'}</span>
         <span className="grow" />
-        <button onClick={() => { if (window.confirm('猫神さまとの会話をリセットしますか？')) api.chatReset().catch((e) => add('error', e.message)); }}>リセット</button>
+        <button onClick={() => { if (window.confirm('猫神さまとの会話をリセットしますか？')) api.chatReset().catch((e) => add('error', e.message)); }}><Icon name="refresh" />リセット</button>
       </div>
       <div className="panel-body chat-body">
         <div id="chatLog" ref={logEl} aria-live="polite">
@@ -132,8 +133,8 @@ export function Chat({ onTrace, onNewRequest, nekoIcon = '/neko-goddess.png' }: 
             placeholder="猫神さまに話しかける（/ でサブオーケストレーター・エージェントを呼び出し、Ctrl+Enter で送信）" />
           <div className="chat-actions">
             <span className="hint">{consoleUrl ? `会話の実行: Agent Console（${consoleUrl}）` : ''}</span>
-            <button type="button" disabled={!busy} onClick={() => api.chatStop().catch((e) => add('error', e.message))}>停止</button>
-            <button type="submit" className="primary" disabled={busy}>送信</button>
+            <button type="button" disabled={!busy} onClick={() => api.chatStop().catch((e) => add('error', e.message))}><Icon name="stop" />停止</button>
+            <button type="submit" className="primary" disabled={busy}><Icon name="forward" />送信</button>
           </div>
         </form>
       </div>

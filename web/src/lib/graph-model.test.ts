@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MODEL_CHOICES, buildGraph, canConnect, isDescendant, modelOptions, parentChoices } from './graph-model';
+import { MODEL_CHOICES, buildGraph, canConnect, isDescendant, isRiskyDir, modelOptions, parentChoices, permLabels } from './graph-model';
 import type { Entity, Tool } from './types';
 
 const E = (id: string, kind: Entity['kind'], name: string, parent_id: string | null = null, o: Partial<Entity> = {}): Entity =>
@@ -39,5 +39,22 @@ describe('graph', () => {
   it('モデル選択肢', () => {
     expect(modelOptions('opus')).toHaveLength(MODEL_CHOICES.length);
     expect(modelOptions('my-model').at(-1)).toEqual(['my-model', 'my-model（現在の値）']);
+  });
+});
+
+describe('ディレクトリのノード', () => {
+  const dir = (perms: Tool['perms']): Tool => ({ id: 'd1', name: 'docs', kind: 'directory', pos: null, path: 'notes/docs', perms });
+  it('権限の表示と、危険（書き込み・削除）の判定', () => {
+    expect(permLabels({ list: true, read: true })).toEqual(['参照', '読み込み']);
+    expect(permLabels(undefined)).toEqual([]);
+    expect([isRiskyDir(dir({ read: true })), isRiskyDir(dir({ write: true })), isRiskyDir(dir({ delete: true })), isRiskyDir(dir({ exec: true })), isRiskyDir(undefined)]).toEqual([false, true, true, true, false]);
+    expect(isRiskyDir({ id: 'x', name: 'Bash', kind: 'builtin', pos: null })).toBe(false);
+  });
+  it('グラフでは、場所と権限をノードの下に出し、担当と接続できる', () => {
+    const a = E('a1', 'agent', 'ag', 'o1');
+    const g = buildGraph([E('o1', 'orchestrator', 'neko'), a], [dir({ list: true, write: true })]);
+    expect(g.nodes.find((n) => n.id === 'd1')!.sub).toBe('notes/docs · 参照・書き込み');
+    expect(buildGraph([a], [dir({})]).nodes.find((n) => n.id === 'd1')!.sub).toBe('notes/docs · 権限なし');
+    expect(canConnect([a], [dir({})], 'a1', 'd1')).toMatchObject({ ok: true, action: 'tool' });
   });
 });

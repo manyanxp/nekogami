@@ -1,6 +1,6 @@
 # npm 依存パッケージのライセンス一覧
 
-> 自動生成: `python3 scripts/gen-licenses.py`（2026-10-24 時点の各 `package-lock.json`）。手で編集しない。
+> 自動生成: `python3 scripts/gen-licenses.py`（2026-10-25 時点の各 `package-lock.json`）。手で編集しない。
 
 ## dashboard/ — Agent Console のサーバー（Node.js）
 
@@ -21,6 +21,7 @@
 | パッケージ | バージョン | ライセンス | 種別 | 備考 |
 |---|---|---|---|---|
 | @anthropic-ai/claude-agent-sdk | 0.3.309 | SEE LICENSE IN README.md | direct |  |
+| zod | 4.6.7 | MIT | direct |  |
 | @anthropic-ai/claude-agent-sdk-darwin-arm64 | 0.3.309 | SEE LICENSE IN LICENSE.md | transitive | optional（OS別バイナリ） |
 | @anthropic-ai/claude-agent-sdk-darwin-x64 | 0.3.309 | SEE LICENSE IN LICENSE.md | transitive | optional（OS別バイナリ） |
 | @anthropic-ai/claude-agent-sdk-linux-arm64 | 0.3.309 | SEE LICENSE IN LICENSE.md | transitive | optional（OS別バイナリ） |
@@ -130,7 +131,6 @@
 | vary | 1.1.2 | MIT | transitive |  |
 | which | 2.0.2 | ISC | transitive |  |
 | wrappy | 1.0.2 | ISC | transitive |  |
-| zod | 4.6.7 | MIT | transitive |  |
 | zod-to-json-schema | 3.25.2 | ISC | transitive |  |
 
 ## web/ — 画面（Next.js）

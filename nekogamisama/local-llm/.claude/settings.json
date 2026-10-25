@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "deny": [
+      "Bash",
+      "Write",
+      "Edit",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch"
+    ]
+  },
+  "modelOverrides": {
+    "claude-haiku-4-5": "qwen3:8b"
+  }
+}

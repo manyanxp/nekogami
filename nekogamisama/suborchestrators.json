@@ -8,5 +8,32 @@
     "type": "agent",
     "agent": "news-agent",
     "description": "日経や海外のニュースを調べるエージェント"
+  },
+  "local-llm": {
+    "type": "session",
+    "dir": "local-llm",
+    "description": "手元の GPU で動くローカル LLM（Ollama の qwen3:8b）の担当。短い質問・要約・単発のファイル読み取り向け。Haiku の代わりに使える。読み取りのみ・文脈が短い",
+    "env": {
+      "ANTHROPIC_BASE_URL": "http://ollama:11434",
+      "ANTHROPIC_AUTH_TOKEN": "ollama",
+      "ANTHROPIC_API_KEY": "",
+      "ANTHROPIC_MODEL": "qwen3:8b",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3:8b",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3:8b",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3:8b",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "qwen3:8b",
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+      "CLAUDE_CODE_OAUTH_TOKEN": "",
+      "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "16384",
+      "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "2048"
+    },
+    "args": [
+      "--tools",
+      "Read,Glob,Grep",
+      "--strict-mcp-config",
+      "--disable-slash-commands",
+      "--max-turns",
+      "8"
+    ]
   }
 }

@@ -1,6 +1,6 @@
 // ポータルのパネル配置（ドッキング）の純粋ロジック。ADR 0024。
-// パネル 4 つ（一覧・チャット・委任フロー・トレース）を、3 つの領域（左の列・右の列・下の行）に、順番つきで置く。
-export const PANELS = ['list', 'chat', 'flow', 'trace'] as const;
+// パネル 3 つ（一覧・チャット・委任フロー）を、3 つの領域（左の列・右の列・下の行）に、順番つきで置く。
+export const PANELS = ['list', 'chat', 'flow'] as const;
 export const REGIONS = ['left', 'right', 'bottom'] as const;
 export type PanelId = (typeof PANELS)[number];
 export type RegionId = (typeof REGIONS)[number];
@@ -8,10 +8,10 @@ export interface Layout { regions: Record<RegionId, PanelId[]>; rightW: number; 
 export interface Rect { left: number; right: number; top: number; bottom: number }
 
 export const DEFAULT_LAYOUT: Layout = {
-  regions: { left: ['list', 'flow', 'trace'], right: ['chat'], bottom: [] },
+  regions: { left: ['list', 'flow'], right: ['chat'], bottom: [] },
   rightW: 420,     // 右の列の幅（px）
   bottomH: 260,    // 下の行の高さ（px）
-  weights: { list: 2, chat: 1, flow: 3, trace: 1.6 },   // 列の中の高さ（下の行では幅）の比
+  weights: { list: 2, chat: 1, flow: 3 },   // 列の中の高さ（下の行では幅）の比
 };
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -21,7 +21,9 @@ const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 export function normalize(saved: unknown): Layout {
   const s = (saved && typeof saved === 'object' ? saved : {}) as Partial<Layout>;
   const d = clone(DEFAULT_LAYOUT);
-  const r = s.regions as Record<string, unknown> | undefined;
+  const raw = s.regions as Record<string, unknown> | undefined;
+  // 廃止したパネル（trace。ターミナル窓に統合）が残っている古い保存値は、そのパネルだけ除いて配置を活かす
+  const r = raw && typeof raw === 'object' ? Object.fromEntries(REGIONS.map((k) => [k, Array.isArray(raw[k]) ? (raw[k] as string[]).filter((x) => x !== 'trace') : raw[k]])) as Record<string, unknown> : undefined;
   const flat = r && typeof r === 'object' ? REGIONS.flatMap((k) => (Array.isArray(r[k]) ? (r[k] as string[]) : [])) : [];
   const valid = flat.length === PANELS.length && PANELS.every((p) => flat.filter((x) => x === p).length === 1);
   const num = (v: unknown, def: number, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : def);

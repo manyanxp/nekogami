@@ -8,6 +8,13 @@ research/
 # 要件の元資料（個人のメモ・参考画像。出どころ不明の画像を含むのでコミットしない）
 docs/add_requirement/
 
+# 担当が読み書きする作業領域（ディレクトリのノードの置き場。中身は利用者のデータなのでコミットしない）
+workspace/*
+!workspace/.gitkeep
+# Python 実行のジョブ置き場（一時ファイル）
+sandbox/jobs/*
+!sandbox/jobs/.gitkeep
+
 # Python / Node
 __pycache__/
 *.pyc
@@ -22,3 +29,6 @@ web/next-env.d.ts
 .env
 .env.*
 .DS_Store
+
+# Claude Code が各 PC で作る手元だけの設定（MCP の承認など）
+**/.claude/settings.local.json

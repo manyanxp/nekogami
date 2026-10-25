@@ -20,7 +20,45 @@ PARENT_KINDS = {
     'subagent': ('agent', 'suborchestrator', 'orchestrator'),
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
-TOOL_KINDS = ('builtin', 'mcp', 'custom')
+TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory')
+# session 型の委任先に持たせられる env と args（ADR 0039）。nekogamisama/bin/delegate.sh の許可リストと同じ規則
+SESSION_ENV_KEYS = frozenset({'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+                              'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+                              'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+                              'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS'})
+SESSION_ARG_FLAGS = {'--tools': True, '--max-turns': True, '--model': True, '--strict-mcp-config': False, '--disable-slash-commands': False}   # True = 値を取る
+SESSION_VALUE_RE = re.compile(r'[A-Za-z0-9_.:/,*@-]{0,200}')
+
+
+def _clean_session_env(env):
+    if not isinstance(env, dict) or any(k not in SESSION_ENV_KEYS for k in env) or not all(isinstance(v, str) and SESSION_VALUE_RE.fullmatch(v) for v in env.values()):
+        raise ValidationError(f'env は、{sorted(SESSION_ENV_KEYS)} をキーにした文字列のオブジェクト（値は英数字と . _ : / , * @ - のみ）')
+    return dict(env)
+
+
+def _clean_session_args(args):
+    out, i = [], 0
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        raise ValidationError('args は文字列の配列')
+    while i < len(args):
+        flag = args[i]
+        if flag not in SESSION_ARG_FLAGS:
+            raise ValidationError(f'args に使えるのは {sorted(SESSION_ARG_FLAGS)} だけ: {flag}')
+        out.append(flag)
+        if SESSION_ARG_FLAGS[flag]:
+            if i + 1 >= len(args) or not SESSION_VALUE_RE.fullmatch(args[i + 1]) or not args[i + 1] or args[i + 1].startswith('-'):
+                raise ValidationError(f'{flag} には値が要る（英数字と . _ : / , * @ - のみ）')
+            out.append(args[i + 1])
+            i += 1
+        i += 1
+    return out
+
+
+DIR_PERMS = ('list', 'read', 'write', 'delete', 'exec')   # 参照（一覧）・読み込み・書き込み・削除・Python の実行（ADR 0038）
+DIR_RISKY_PERMS = ('write', 'delete', 'exec')   # 担当に新しく足すとき、確認が要る権限
+DIR_SEGMENT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
+DIR_MAX_DEPTH = 8
+DIR_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]{0,39}$')   # MCP のサーバー名（dir-<名前>）になる。記号は置き換えられうるので、英数字とハイフンだけ
 # Claude Code の組み込みツール（ノードグラフのツールパレットに出す）。台帳上のメタ情報であり、エージェントの実際の権限は変えない（ADR 0014）
 BUILTIN_TOOLS = ('Agent', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Write', 'Edit', 'Bash')
 POS_LIMIT = 100000
@@ -65,6 +103,28 @@ def _clean_runtime(rt, project_dir: Path):
             raise ValidationError('compose_file はプロジェクト配下の .yml/.yaml のみ指定できる')
         out.update(compose_file=str(p.relative_to(project_dir)), service=svc)
     return out
+
+
+def _clean_dir_path(path):
+    """ディレクトリのノードの場所。作業用の領域（Agent Console の FS_ROOT）からの相対パス。絶対パス・`..`・隠しフォルダは不可"""
+    if not isinstance(path, str) or not path.strip():
+        raise ValidationError('path が必要（作業領域からの相対パス。例: docs/notes）')
+    path = path.strip()
+    if path.startswith(('/', '\\')) or '\\' in path:
+        raise ValidationError('path は相対パス（先頭の / や \\ は不可）')
+    parts = path.rstrip('/').split('/')
+    if len(parts) > DIR_MAX_DEPTH or not all(DIR_SEGMENT_RE.match(p) and p not in ('.', '..') for p in parts):
+        raise ValidationError(f'path は英数字と . _ - の名前を / でつないだ相対パス（先頭は英数字、{DIR_MAX_DEPTH} 階層まで。.. や絶対パスは不可）')
+    return '/'.join(parts)
+
+
+def _clean_dir_perms(perms):
+    """権限。既定はすべてオフ。指定のないものはオフ"""
+    if perms is None:
+        perms = {}
+    if not isinstance(perms, dict) or any(k not in DIR_PERMS for k in perms):
+        raise ValidationError(f'perms は {DIR_PERMS} をキーにした真偽値のオブジェクト')
+    return {k: bool(perms.get(k)) for k in DIR_PERMS}
 
 
 def _clean_pos(pos):
@@ -255,11 +315,16 @@ class Registry:
             kind = data.get('kind') or 'custom'
             if kind not in TOOL_KINDS:
                 raise ValidationError(f'kind は {TOOL_KINDS} のいずれか')
+            if kind == 'directory' and not DIR_NAME_RE.match(name):
+                raise ValidationError('ディレクトリの名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
             if any(t['name'] == name for t in self._tools.values()):
                 raise ValidationError(f'ツール "{name}" は既に使われている')
             tid = tid or str(uuid.uuid4())
             t = {'id': tid, 'name': name, 'kind': kind, 'description': str(data.get('description') or '')[:300],
                  'pos': _clean_pos(data.get('pos')), 'created_at': _now()}
+            if kind == 'directory':
+                t['path'] = _clean_dir_path(data.get('path'))
+                t['perms'] = _clean_dir_perms(data.get('perms'))
             self._tools[tid] = t
             self._save()
             return dict(t)
@@ -272,6 +337,13 @@ class Registry:
                 self._tools[tid]['pos'] = _clean_pos(patch['pos'])
             if 'description' in patch:
                 self._tools[tid]['description'] = str(patch['description'] or '')[:300]
+            if self._tools[tid]['kind'] == 'directory':   # 場所と権限は、ディレクトリのノードだけ
+                if 'path' in patch:
+                    self._tools[tid]['path'] = _clean_dir_path(patch['path'])
+                if 'perms' in patch:
+                    self._tools[tid]['perms'] = _clean_dir_perms(patch['perms'])
+            elif 'path' in patch or 'perms' in patch:
+                raise ValidationError('path と perms を持てるのは、ディレクトリのノードだけ')
             self._save()
             return dict(self._tools[tid])
 
@@ -279,12 +351,28 @@ class Registry:
         with self._lock:
             if tid not in self._tools:
                 raise NotFound(tid)
+            if self._tools[tid]['kind'] == 'directory':
+                self._detach_directory(self._tools[tid]['name'])
             del self._tools[tid]
             for e in self._items.values():
                 if tid in e['tool_ids']:
                     e['tool_ids'] = [i for i in e['tool_ids'] if i != tid]
                     e['updated_at'] = _now()
             self._save()
+
+    def _detach_directory(self, name):
+        """消すディレクトリのノードの項目（mcp__dir-<名前>__*）を、担当の定義ファイルから外す。
+        残すと、同じ名前でノードを作り直したときに、確認なしで担当につながってしまう（ADR 0037）。"""
+        for e in self._items.values():
+            d = e.get('definition')
+            if not d or d['kind'] == 'claude-md':
+                continue
+            try:
+                tools = self.defs.read(d)['tools']
+                if tools and any(entry_node(t) == name for t in tools):
+                    self.defs.write(d, tools=[t for t in tools if entry_node(t) != name])
+            except DefinitionError as ex:
+                raise ValidationError(f'{e["name"]} の定義ファイルから接続を外せなかった: {ex}')
 
     def _seed_tools(self):
         """組み込みツールと .mcp.json の MCP サーバーをツールとして登録する（UUID v5。冪等）。"""
@@ -327,6 +415,10 @@ class Registry:
                 return d
             tools = None
             if body['tool_ids'] != cur['tool_ids']:
+                added = [self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools]
+                risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in DIR_RISKY_PERMS))
+                if risky and not allow_dangerous:
+                    raise DefinitionError(f'書き込み・削除・Python 実行ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
                 current = self.defs.read(d)['tools'] or []
                 tools = merge_tools(current, self._tool_names(body['tool_ids']), self._catalog())
             self.defs._check(body['description'], body['model'], tools)
@@ -471,6 +563,11 @@ class Registry:
                 if not p.is_dir() or (p != self.project_dir and self.project_dir not in p.parents):
                     raise ValidationError('dir はプロジェクト配下の既存フォルダを指定する')
                 new = {'type': 'session', 'dir': os.path.relpath(p, self.delegate_file.parent), 'description': desc}
+                old = self._delegate_read().get(name) or {}
+                for key, clean in (('env', _clean_session_env), ('args', _clean_session_args)):   # 指定がなければ、今の値を保つ（画面の編集で消えない）
+                    value = entry[key] if key in entry else old.get(key)
+                    if value:
+                        new[key] = clean(value)
             else:
                 raise ValidationError("type は 'agent' か 'session'")
             data = self._delegate_read()

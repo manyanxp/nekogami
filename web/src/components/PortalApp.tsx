@@ -11,10 +11,10 @@ import { Chat, type TraceState } from './Chat';
 import { Dock } from './Dock';
 import { EntityDialog, EntityList, type ListFilter } from './EntityList';
 import { FlowView } from './FlowView';
+import { Icon } from './Icon';
 import { Gate, UserMenu, useMe } from './Gate';
 import { ToastProvider, useToast } from './Toast';
 import { TerminalWindows } from './TerminalWindows';
-import { TraceChips, TraceLog } from './TracePanel';
 
 function Portal() {
   const toast = useToast();
@@ -58,13 +58,13 @@ function Portal() {
         <select value={filter.kind} onChange={(e) => setFilter({ ...filter, kind: e.target.value })} aria-label="種別">
           <option value="">すべての種別</option><option value="suborchestrator">サブオーケストレーター</option><option value="agent">エージェント</option><option value="subagent">サブエージェント</option>
         </select>
-        <button onClick={() => setFilter({ ...filter, collapsed: new Set() })} title="すべて展開">⊞ 展開</button>
-        <button onClick={() => setFilter({ ...filter, collapsed: new Set(items.filter((e) => items.some((c) => c.parent_id === e.id)).map((e) => e.id)) })} title="すべて折りたたむ">⊟ 折りたたみ</button>
+        <button onClick={() => setFilter({ ...filter, collapsed: new Set() })} title="すべて展開"><Icon name="expand" />展開</button>
+        <button onClick={() => setFilter({ ...filter, collapsed: new Set(items.filter((e) => items.some((c) => c.parent_id === e.id)).map((e) => e.id)) })} title="すべて折りたたむ"><Icon name="list" />折りたたみ</button>
         <span className="grow" />
-        {admin && <a className="navlink" href="/admin" title="猫神さま（管理者エージェント）の管理ページ">🐾 猫神さま管理 →</a>}
+        {admin && <a className="navlink" href="/admin" title="猫神さま（管理者エージェント）の管理ページ"><Icon name="settings" />猫神さま管理</a>}
         <span className={`pill ${health?.ok ? 'ok' : 'ng'}`} title="バックエンドの状態">{health ? (health.ok ? 'API 正常' : 'API 異常') : 'API 未接続'}</span>
-        {admin && <button onClick={sync} title=".claude/agents と Agent Console を台帳に取り込む">組み込みを取り込み</button>}
-        {admin && <EntityDialog items={items} onSaved={async () => { await reload(); refreshDelegation(); }}><button className="primary">＋ 追加</button></EntityDialog>}
+        {admin && <button onClick={sync} title=".claude/agents と Agent Console を台帳に取り込む"><Icon name="download" />組み込みを取り込み</button>}
+        {admin && <EntityDialog items={items} onSaved={async () => { await reload(); refreshDelegation(); }}><button className="primary"><Icon name="add" />追加</button></EntityDialog>}
         <UserMenu />
       </header>
       <Dock panels={{
@@ -73,9 +73,6 @@ function Portal() {
         flow: (<>
           <div className="pane-head" data-handle title="ドラッグして、別の位置へ"><span className="grip">⠿</span><strong>委任フロー</strong><span className="hint">{flow.agentsRun ? `— ${flow.agentsRun} 回の呼び出し` : ''}</span></div>
           <div className="panel-body"><FlowView view={flow} entities={items} /></div></>),
-        trace: (<>
-          <div className="pane-head" data-handle title="ドラッグして、別の位置へ"><span className="grip">⠿</span><strong>トレース</strong><span className="hint">{ts.trace.agents.size ? `— ${ts.trace.agents.size} 体が選ばれた` : ''}</span></div>
-          <div className="panel-body"><TraceChips trace={ts.trace} entities={items} /><TraceLog lines={ts.lines} entities={items} /></div></>),
       }} />
       <TerminalWindows ts={ts} entities={items} />
       <Dialog.Root open={!!con} onOpenChange={(o) => !o && setCon(null)}>
