@@ -17,7 +17,8 @@ export function loadPyNodes(registryFile) {
     const byId = new Map(tools.map((t) => [t.id, t]));
     return tools.filter((t) => t.kind === 'python' && NODE_NAME.test(t.name || '') && typeof t.code === 'string' && IDENT.test(t.func || '') && Array.isArray(t.params))
       .map((t) => ({
-        name: t.name, description: String(t.description || t.doc || ''), code: t.code, func: t.func,
+        // source … 実行する関数のソース。「処理だけ」の形式では、API が入力ノードから自動生成したもの（ADR 0045）。旧形式は code と同じ
+        name: t.name, description: String(t.description || t.doc || ''), code: typeof t.source === 'string' ? t.source : t.code, func: t.func,
         params: t.params.filter((p) => IDENT.test(p.name || '') && TYPES.includes(p.type)),
         inputs: (t.input_ids || []).map((i) => byId.get(i)).filter((i) => i?.kind === 'input' && 'parsed' in i).map((i) => ({ param: i.param, dtype: i.dtype, value: i.parsed, node: i.name })),
       }));

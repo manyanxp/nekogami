@@ -94,3 +94,41 @@ SECTION = f"""
 
 上の性格と話し方は、**あなた自身の返答の言葉づかいにだけ**使う。委任先の結果の事実関係、出典、手順、「守ること」は、性格に関わらず変えない。
 """
+
+
+# ---- サブオーケストレーターの性格（ADR 0044）----
+# 定義ファイルの本文にある「## 性格・話し方」の節（手で書いた「## 性格」の節も同じものとして読む）を、フォームで読み書きする。
+# 猫神さまの personality.md と同じ項目（一人称・呼びかけ・口調・性格）と同じ検査を使う。
+SUB_SECTION_RE = re.compile(r'^## (?:性格・話し方|性格)[ \t]*\n(.*?)(?=^## |\Z)', re.S | re.M)
+SUB_NOTE = '※ この性格と話し方は、自分の返答の言葉づかいにだけ使う。事実関係・出典・手順・守ることは、性格に関わらず変えない。'
+
+
+def render_section(f):
+    return (f"## 性格・話し方\n\n- 一人称: {f['first_person']}\n- 呼びかけ: {f['address']}\n- 口調: {f['tone']}\n\n"
+            f"{f['traits']}\n\n{SUB_NOTE}\n")
+
+
+def read_section(prompt):
+    """プロンプトの本文から性格を読む。節がなければ既定値（exists=False）。手で書いた箇条書きの節は、性格の文章としてそのまま読む"""
+    m = SUB_SECTION_RE.search(prompt or '')
+    if not m:
+        return {**DEFAULTS, 'traits': '', 'exists': False}
+    body = m[1]
+    f = dict(DEFAULTS)
+    for k, rx in FIELD_RE.items():
+        fm = rx.search(body)
+        if fm and fm[1].strip():
+            f[k] = fm[1].strip()
+    rest = [ln for ln in body.split('\n') if not any(rx.match(ln) for rx in FIELD_RE.values()) and ln.strip() != SUB_NOTE]
+    f['traits'] = '\n'.join(rest).strip()
+    return {**f, 'exists': True}
+
+
+def write_section(prompt, data):
+    """性格の節を、プロンプトの本文に書き込む（既存の節は置き換え、なければ末尾に足す）。戻り値: 新しい本文"""
+    f = {k: _clean(k, data.get(k, DEFAULTS[k])) for k in LIMITS}
+    section = render_section(f)
+    prompt = prompt or ''
+    if SUB_SECTION_RE.search(prompt):
+        return SUB_SECTION_RE.sub(lambda _m: section + '\n', prompt, count=1).rstrip('\n') + '\n'
+    return prompt.rstrip('\n') + '\n\n' + section

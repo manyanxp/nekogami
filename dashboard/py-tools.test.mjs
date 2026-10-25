@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildProgram, callPy, checkPyAccess, resolveArgs } from './py-tools.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { buildProgram, callPy, checkPyAccess, loadPyNodes, resolveArgs } from './py-tools.mjs';
 
 const node = {
   name: 'calc', func: 'main', code: 'def main(n: int, tags: list = None, s: set = None):\n    return n\n', description: '',
@@ -48,4 +51,24 @@ test('接続していない担当は使えない', () => {
   assert.equal(checkPyAccess({ ...base, callerTools: ['Read'] }).ok, false);
   assert.equal(checkPyAccess({ ...base, callerName: undefined, callerTools: ['mcp__py-calc__*'] }).ok, false);
   assert.equal(checkPyAccess({ ...base, toolName: 'mcp__py-none__run', callerTools: ['mcp__py-none__*'] }).ok, false);
+});
+
+test('処理だけの形式: 台帳の source（自動生成した関数）を実行し、入力ノードの値が引数になる（ADR 0045）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pytools-'));
+  const file = path.join(dir, 'registry.json');
+  fs.writeFileSync(file, JSON.stringify({ tools: [
+    { id: 'i1', name: 'a-in', kind: 'input', param: 'a', dtype: 'int', value: '21', parsed: 21 },
+    { id: 'p1', name: 'dbl', kind: 'python', style: 'body', func: 'main', code: 'return a * 2', source: 'def main(a: int):\n    return a * 2\n',
+      params: [{ name: 'a', type: 'int', required: false, default: 21 }], input_ids: ['i1'] },
+  ] }));
+  const [py] = loadPyNodes(file);
+  assert.equal(py.code, 'def main(a: int):\n    return a * 2\n');   // 実行するのは自動生成した関数で、処理だけのコードではない
+  assert.deepEqual(resolveArgs(py, {}), { a: 21 });
+  assert.deepEqual(resolveArgs(py, { a: 5 }), { a: 5 });          // 担当が渡せば優先
+  let ran = '';
+  const r = await callPy(py, {}, async (code) => { ran = code; return { stdout: '__NEKO_PY_RESULT__42\n', stderr: '', exit: 0 }; });
+  assert.ok(ran.startsWith('def main(a: int):'));
+  assert.ok(ran.includes('main(**__neko_args)'));
+  assert.deepEqual([r.ok, r.text], [true, '戻り値: 42']);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

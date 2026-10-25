@@ -17,6 +17,10 @@ import { ToastProvider, useToast } from './Toast';
 
 type Guard = <T>(fn: () => Promise<T>) => Promise<T | undefined>;
 
+const ASIDE_KEY = 'admin.aside';   // 左の列（プロパティ）の開閉。既定は開く（'0' を保存したときだけ閉じる）
+/** 追加できるノードの種類（ツールバーと右クリックメニューで共通） */
+const NODE_ADDS: [AddSpec['kind'], string][] = [['tool', 'ツール'], ['directory', 'ディレクトリ'], ['llm', 'ローカル LLM'], ['python', 'Python'], ['input', '入力']];
+
 function Admin() {
   const toast = useToast();
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -25,6 +29,9 @@ function Admin() {
   const [sel, setSel] = useState<Sel>(null);
   const [ok, setOk] = useState<boolean | null>(null);
   const [fitKey, setFitKey] = useState(0);
+  const [asideOpen, setAsideOpen] = useState(true);
+  useEffect(() => { try { setAsideOpen(localStorage.getItem(ASIDE_KEY) !== '0'); } catch { /* 保存不可。開いたまま */ } }, []);
+  const toggleAside = () => setAsideOpen((o) => { try { localStorage.setItem(ASIDE_KEY, o ? '0' : '1'); } catch { /* 保存不可 */ } return !o; });
   const [adding, setAdding] = useState<AddSpec | null>(null);
   const [editId, setEditId] = useState<string | null>(null);   // 右クリック →「編集…」で開くノードの編集ダイアログ
   const [del, setDel] = useState<{ open: boolean; row: DelegationRow | null }>({ open: false, row: null });
@@ -137,19 +144,29 @@ function Admin() {
   const onContext = useCallback((c: CtxTarget) => {
     const { entities: ents, tools: tls } = live.current;
     const items: NonNullable<typeof menu>['items'] = [];
-    const add = (kind: Kind | 'tool', parentId?: string, parentName?: string) => items.push([`＋ ${kind === 'tool' ? 'ツール' : KIND_LABEL[kind]}${parentName ? `（${parentName} の配下）` : ''}`, () => setAdding({ kind, parentId, at: { x: c.x, y: c.y } })]);
+    const at = { x: c.x, y: c.y };
+    // 追加できる種類は、ツールバーと同じ。担当は親を指定して作れる
+    const addEntity = (kind: Kind, parentId?: string, parentName?: string) => items.push([`＋ ${KIND_LABEL[kind]}${parentName ? `（${parentName} の配下）` : ''}`, () => setAdding({ kind, parentId, at })]);
+    const addNodes = () => NODE_ADDS.forEach(([kind, label]) => items.push([`＋ ${label}`, () => setAdding({ kind, at })]));
     const e = c.target.type === 'node' ? ents.find((n) => n.id === c.target.id) : undefined;
     const t = c.target.type === 'node' ? tls.find((n) => n.id === c.target.id) : undefined;
-    if (c.target.type === 'bg') (['suborchestrator', 'agent', 'subagent', 'tool'] as const).forEach((k) => add(k));
+    const openProps = () => { setAsideOpen(true); try { localStorage.setItem(ASIDE_KEY, '1'); } catch { /* 保存不可 */ } };
+    if (c.target.type === 'bg') { (['suborchestrator', 'agent', 'subagent'] as const).forEach((k) => addEntity(k)); items.push('---'); addNodes(); }
     else if (e) {
-      childKinds(e.kind).forEach((k) => add(k, e.id, e.name)); add('tool'); items.push('---');
+      items.push(['✎ 編集…', () => setEditId(e.id)], ['🖼 アイコンを変更…', () => setEditId(e.id)], ['📋 プロパティを開く', openProps], '---');
+      childKinds(e.kind).forEach((k) => addEntity(k, e.id, e.name)); items.push('---'); addNodes(); items.push('---');
       if (!e.protected) items.push(['名前を変更…', () => void rename(e)]);
-      items.unshift(['✎ 編集…', () => setEditId(e.id)], ['🖼 アイコンを変更…', () => setEditId(e.id)], '---');
+      if (e.kind === 'suborchestrator' && e.definition?.kind === 'agent-md') {
+        items.push([e.auto_spawn ? '担当の自動作成を禁止する' : '担当の自動作成を許可する', () => void guarded(async () => { await api.update(e.id, { auto_spawn: !e.auto_spawn }); toast(`${e.name} の担当の自動作成を${e.auto_spawn ? '禁止' : '許可'}にしました`); await reload(); })]);
+      }
       items.push([e.protected ? '🔒 削除できません（管理者エージェント）' : '削除…', () => void deleteSelected(), { danger: !e.protected, disabled: e.protected }]);
-    } else if (t) { add('tool'); items.push('---', ['ツールを削除…', () => void deleteSelected(), { danger: true }]); }
-    else if (c.target.type === 'edge') { const isTool = /^(tool|input|call):/.test(c.target.id!); items.push([isTool ? '接続を外す' : '親子のワイヤーは削除できません', () => void deleteSelected(), { disabled: !isTool }]); }
-    setMenu({ x: Math.min(c.clientX, window.innerWidth - 240), y: Math.min(c.clientY, window.innerHeight - 40 * (items.length + 1)), items });
-  }, [deleteSelected, rename]);
+    } else if (t) { items.push(['📋 プロパティを開く', openProps], '---'); addNodes(); items.push('---', ['ツールを削除…', () => void deleteSelected(), { danger: true }]); }
+    else if (c.target.type === 'edge') {
+      const label = ({ tool: '接続を外す', input: '入力を外す', call: '呼ぶ接続を外す' } as Record<string, string>)[c.target.id!.split(':')[0]];
+      items.push([label || '親子のワイヤーは削除できません（親を付け替える）', () => void deleteSelected(), { disabled: !label }]);
+    }
+    setMenu({ x: Math.min(c.clientX, window.innerWidth - 240), y: Math.min(c.clientY, window.innerHeight - 36 * (items.length + 1)), items });
+  }, [deleteSelected, rename, guarded, reload, toast]);
 
   useEffect(() => {
     if (!menu) return;
@@ -169,12 +186,14 @@ function Admin() {
     <div className="admin">
       <header>
         <a className="navlink" href="/" title="ポータルの一覧へ"><Icon name="back" />ポータル</a>
-        <div className="brand">🐾 猫神さま管理</div><span className="grow" />
+        <div className="brand">🐾 猫神さま管理</div>
+        <button type="button" className="aside-toggle" aria-expanded={asideOpen} aria-controls="adminAside" onClick={toggleAside} title="左の列（猫神さま・ユーザー・テーマ・性格・委任先・選択したノードのプロパティ）を開閉"><Icon name="list" size={18} />{asideOpen ? 'プロパティを閉じる' : 'プロパティを開く'}</button>
+        <span className="grow" />
         <span className={`pill ${ok ? 'ok' : 'ng'}`}>{ok === null ? '' : ok ? 'API 接続中' : 'API に接続できません'}</span>
         <UserMenu />
       </header>
-      <div className="layout">
-        <aside>
+      <div className={`layout${asideOpen ? '' : ' closed'}`}>
+        <aside id="adminAside">
           {overview && <GodCard overview={overview} guarded={guarded} reload={reload} />}
           <UsersCard guarded={guarded} />
           <ThemeCard guarded={guarded} />

@@ -7,7 +7,8 @@ export const PY_TYPES: { key: PyType; example: string }[] = [
   { key: 'str', example: 'そのまま文字を書く' }, { key: 'int', example: '42' }, { key: 'float', example: '3.14' }, { key: 'bool', example: 'true / false' },
   { key: 'list', example: '[1, 2, 3]' }, { key: 'dict', example: '{"a": 1}' }, { key: 'tuple', example: '[1, 2]（配列で書く）' }, { key: 'set', example: '[1, 2]（配列で書く）' },
 ];
-export const PY_SAMPLE = 'def main(x: int, label: str = "a"):\n    """説明（1 行目が担当に見える）"""\n    return {"x2": x * 2, "label": label}\n';
+/** 処理の書き方の例。関数名・引数は書かない（入力ノードをつなぐと、その引数名が変数になる。結果は return で返す。ADR 0045） */
+export const PY_SAMPLE = '# 入力ノードをつなぐと、その引数名がそのまま変数として使えます\nresult = 1 + 1\nreturn {"result": result}\n';
 
 export const MAX_DEPTH = 4;   // ツリーの深さの上限（猫神さまを 0 とする）。バックエンドの MAX_DEPTH、実行時の CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH と同じ
 export const PARENT_KINDS: Record<Kind, Kind[]> = {
@@ -38,13 +39,33 @@ export const permLabels = (perms?: Partial<DirPerms>) => DIR_PERMS.filter((p) =>
 /** 書き込み・削除・Python 実行ができるディレクトリ。担当に新しく接続するときは確認が要る */
 export const isRiskyDir = (t?: Tool) => t?.kind === 'directory' && RISKY_DIR_PERMS.some((k) => t.perms?.[k]);
 const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind === 'llm' ? `ローカル LLM · ${t.model ?? ''}`
-  : t.kind === 'python' ? `Python · ${t.func ?? 'main'}(${(t.params ?? []).map((p) => p.name).join(', ')})`
+  : t.kind === 'python' ? `Python · (${(t.params ?? []).map((p) => p.name).join(', ')})`
   : t.kind === 'input' ? `入力 · ${t.param ?? ''}: ${t.dtype ?? ''}` : t.kind);
 
 const COL = 270;
-const ROW = 84;
+const ROW = 108;
 
-export interface GraphNode { id: string; type: 'entity' | 'tool'; kind: string; label: string; sub: string; protected: boolean; icon?: string | null; x: number; y: number }
+export interface GraphNode { id: string; type: 'entity' | 'tool'; kind: string; label: string; sub: string; protected: boolean; icon?: string | null; x: number; y: number;
+  /** ノードに出す参照用のプロパティ（編集はしない。プロンプトは含めない）と、そのツールチップ全文 */
+  props?: string[]; detail?: string }
+
+/** 担当（エンティティ）の参照用プロパティ。ツール数・配下の数・状態など。モデルは sub に出すので含めない */
+export function entityProps(e: Entity, entities: Entity[]): string[] {
+  const kids = entities.filter((x) => x.parent_id === e.id).length;
+  const flags = [!e.enabled && '無効', e.definition ? null : '定義なし', (e.callee_ids?.length ?? 0) > 0 && `呼べる ${e.callee_ids!.length}`, e.auto_spawn && '自動作成可'].filter(Boolean) as string[];
+  return [`ツール ${e.tool_ids?.length ?? 0} · 配下 ${kids}`, ...(flags.length ? [flags.join(' · ')] : [])];
+}
+
+/** ツールチップ用の全文（プロンプト以外のプロパティ） */
+export function entityDetail(e: Entity, entities: Entity[], tools: Tool[]): string {
+  const byId = new Map(entities.map((x) => [x.id, x.name]));
+  const names = (e.tool_ids || []).map((i) => tools.find((t) => t.id === i)?.name).filter(Boolean).join(', ');
+  const parent = e.parent_id ? byId.get(e.parent_id) : null;
+  return [`${e.name}（${e.kind}）`, e.description && `説明: ${e.description}`, `モデル: ${e.model || '指定なし'}`, parent && `親: ${parent}`,
+    `ツール: ${names || 'なし'}`, (e.callee_ids?.length ?? 0) > 0 && `呼べる担当: ${e.callee_ids!.map((i) => byId.get(i)).filter(Boolean).join(', ')}`,
+    e.auto_spawn && '担当の自動作成: 許可', e.tags?.length ? `タグ: ${e.tags.join(', ')}` : '', `状態: ${e.enabled ? '有効' : '無効'}`,
+    e.definition ? `定義: ${e.definition.path}` : '定義ファイルなし'].filter(Boolean).join('\n');
+}
 export interface GraphEdge { id: string; type: 'tree' | 'tool' | 'input' | 'call'; from: string; to: string }
 /** 担当 → 担当（呼ぶ）のワイヤーに使うピン。親子（左右のピン）とは別に、上下のピンでつなぐ */
 export const CALL_OUT = 'call';
@@ -74,7 +95,7 @@ export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNod
   walk('', 0);
   const toolX = (maxDepth + 1) * COL + 40;
   const nodes: GraphNode[] = [];
-  for (const e of entities) nodes.push({ id: e.id, type: 'entity', kind: e.kind, label: e.name, sub: e.model || '', protected: !!e.protected, icon: e.icon || null, ...(e.pos || auto.get(e.id) || { x: 0, y: 0 }) });
+  for (const e of entities) nodes.push({ id: e.id, type: 'entity', kind: e.kind, label: e.name, sub: e.model || '', protected: !!e.protected, icon: e.icon || null, props: entityProps(e, entities), detail: entityDetail(e, entities, tools), ...(e.pos || auto.get(e.id) || { x: 0, y: 0 }) });
   tools.forEach((t, i) => nodes.push({ id: t.id, type: 'tool', kind: t.kind, label: t.name, sub: toolSub(t), protected: false, ...(t.pos || { x: toolX, y: i * 64 }) }));
   const known = new Set(nodes.map((n) => n.id));
   const edges: GraphEdge[] = [];
@@ -85,6 +106,27 @@ export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNod
   for (const e of entities) for (const cid of e.callee_ids || []) if (known.has(cid)) edges.push({ id: `call:${e.id}>${cid}`, type: 'call', from: e.id, to: cid });
   for (const t of tools) for (const iid of t.input_ids || []) if (known.has(iid)) edges.push({ id: `input:${iid}>${t.id}`, type: 'input', from: iid, to: t.id });
   return { nodes, edges };
+}
+
+/**
+ * 選択中のノードにつながる線のうち、猫神さまから続く線の ID（強調表示する）。
+ * 担当を選ぶと、猫神さまからその担当までの親子の線。ツール・入力を選ぶと、それを使う担当の線（と、その担当までの親子の線）。
+ */
+export function highlightEdges(entities: Entity[], tools: Tool[], selectedId: string | null): Set<string> {
+  const out = new Set<string>();
+  if (!selectedId) return out;
+  const byId = new Map(entities.map((e) => [e.id, e]));
+  const chain = (id: string) => {   // 猫神さま → id の親子の線
+    for (let cur = byId.get(id), n = 0; cur?.parent_id && byId.has(cur.parent_id) && n < 100; cur = byId.get(cur.parent_id), n++) out.add(`tree:${cur.parent_id}>${cur.id}`);
+  };
+  if (byId.has(selectedId)) { chain(selectedId); return out; }
+  const viaTool = (toolId: string) => { for (const e of entities) if (e.tool_ids?.includes(toolId)) { out.add(`tool:${e.id}>${toolId}`); chain(e.id); } };
+  const tool = tools.find((t) => t.id === selectedId);
+  if (!tool) return out;
+  if (tool.kind === 'input') {   // 入力ノード → Python ノード → それを使う担当
+    for (const py of tools) if (py.input_ids?.includes(tool.id)) { out.add(`input:${tool.id}>${py.id}`); viaTool(py.id); }
+  } else viaTool(tool.id);
+  return out;
 }
 
 export function isDescendant(entities: Entity[], ancestorId: string, id: string): boolean {
@@ -118,9 +160,11 @@ export function canConnect(entities: Entity[], tools: Tool[], fromId: string, to
     const py = tools.find((t) => t.id === toId);
     if (py?.kind !== 'python') return { ok: false, reason: '入力ノードは、Python ノードにだけつなげる' };
     if ((py.input_ids || []).includes(fromId)) return { ok: false, reason: 'すでに接続されている' };
-    const param = (py.params || []).find((p) => p.name === fromTool.param);
-    if (!param) return { ok: false, reason: `関数 ${py.func} に引数 ${fromTool.param} がない` };
-    if (param.type !== fromTool.dtype) return { ok: false, reason: `型が合わない（入力 ${fromTool.dtype}、引数 ${param.type}）` };
+    if (py.style !== 'body') {   // 旧形式（関数ごと書く）: 入力ノードは、関数の引数に合うものだけ。「処理だけ」の形式は、つなぐと引数が自動で決まる（ADR 0045）
+      const param = (py.params || []).find((p) => p.name === fromTool.param);
+      if (!param) return { ok: false, reason: `関数 ${py.func} に引数 ${fromTool.param} がない` };
+      if (param.type !== fromTool.dtype) return { ok: false, reason: `型が合わない（入力 ${fromTool.dtype}、引数 ${param.type}）` };
+    }
     const twin = tools.find((t) => (py.input_ids || []).includes(t.id) && t.param === fromTool.param);
     if (twin) return { ok: false, reason: `引数 ${fromTool.param} には、入力ノード ${twin.name} がすでにつながっている` };
     return { ok: true, action: 'input', from: fromTool, to: py };

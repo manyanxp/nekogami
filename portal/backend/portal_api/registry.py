@@ -10,7 +10,8 @@ from pathlib import Path
 
 from .definitions import DefinitionError, DefinitionStore, entry_node, merge_tools, node_entry
 from .icons import IconError, IconStore
-from .pynodes import MAX_VALUE, PY_TYPES, binding_errors, IDENT_RE, parse_function, parse_input
+from .pynodes import (IDENT_RE, MAX_VALUE, PY_TYPES, binding_errors, build_function, input_errors, is_function_style, params_from_inputs,
+                      parse_function, parse_input)
 
 KINDS = ('orchestrator', 'suborchestrator', 'agent', 'subagent')
 # 親にできる種別。orchestrator（猫神さま）は親なし。suborchestrator は orchestrator か、別の suborchestrator の下（入れ子。ADR 0042）
@@ -152,17 +153,25 @@ def _clean_llm_fields(data, base=None):
     return out
 
 
-def _clean_py_fields(data, base=None):
-    """Python ノードの code / func を検証し、引数（params）と説明（doc）を読み取る。コードは実行しない（ADR 0041）"""
+def _clean_py_fields(data, base=None, inputs=()):
+    """Python ノードの code / func を検証し、引数（params）と、実行する関数のソース（source）を作る。コードは実行しない（ADR 0041・0045）
+    - 旧形式（コードに `def <func>(...)` がある）: 引数は型注釈から読む。入力ノードは、その引数に合うものだけつなげる。
+    - 処理だけの形式: コードは関数の中身だけ。引数は、つないだ入力ノード（inputs）から作る。実行時に関数を自動生成する。"""
     out = dict(base or {})
-    if 'code' in data or 'func' in data or not base:
-        code = data.get('code', out.get('code'))
-        func = str(data.get('func', out.get('func', 'main')) or '').strip()
-        try:
+    code = data.get('code', out.get('code'))
+    func = str(data.get('func', out.get('func', 'main')) or '').strip()
+    try:
+        if is_function_style(code, func):
             info = parse_function(code, func)
-        except ValueError as e:
-            raise ValidationError(str(e))
-        out.update(code=code, func=func, params=info['params'], doc=info['doc'])
+            out.update(style='function', code=code, func=func, params=info['params'], doc=info['doc'], source=code)
+        else:
+            errors = input_errors(inputs)
+            if errors:
+                raise ValueError('; '.join(errors))
+            params = params_from_inputs(inputs)
+            out.update(style='body', code=code, func=func, params=params, doc='', source=build_function(code, params, func))
+    except ValueError as e:
+        raise ValidationError(str(e))
     return out
 
 
@@ -528,18 +537,18 @@ class Registry:
             elif any(k in patch for k in ('model', 'prompt', 'temperature', 'max_tokens')):
                 raise ValidationError('model・prompt・temperature・max_tokens を持てるのは、LLM ノードだけ')
             kind = self._tools[tid]['kind']
-            if kind == 'python':   # コード・関数名。つないでいる入力ノードと合わなくなる変更は、受け付けない
-                new = _clean_py_fields(patch, base=self._tools[tid])
+            if kind == 'python':   # 処理（コード）と入力のつなぎ。引数と関数は、つないだ入力ノードから作り直す
+                new = dict(self._tools[tid])
                 if 'input_ids' in patch:
                     new['input_ids'] = self._clean_input_ids(patch['input_ids'])
-                self._check_bindings(new, [self._tools[i] for i in new.get('input_ids', [])])
-                self._tools[tid].update(new)
-            elif kind == 'input':   # 値・型・引数名。つなぎ先の Python ノードと合わなくなる変更は、受け付けない
+                self._tools[tid].update(self._rebuild_py(new, patch, [self._tools[i] for i in new.get('input_ids', [])]))
+            elif kind == 'input':   # 値・型・引数名。つなぎ先の Python ノードの引数と関数も作り直す（合わなくなる変更は、受け付けない）
                 new = _clean_input_fields(patch, base=self._tools[tid])
-                for p in self._tools.values():
-                    if p['kind'] == 'python' and tid in p.get('input_ids', []):
-                        self._check_bindings(p, [new if i == tid else self._tools[i] for i in p['input_ids']])
+                rebuilt = [(p, self._rebuild_py(dict(p), {}, [new if i == tid else self._tools[i] for i in p['input_ids']]))
+                           for p in self._tools.values() if p['kind'] == 'python' and tid in p.get('input_ids', [])]
                 self._tools[tid].update(new)
+                for p, np in rebuilt:
+                    p.update(np)
             elif any(k in patch for k in ('code', 'func', 'input_ids', 'param', 'dtype', 'value')):
                 raise ValidationError('code・func・input_ids は Python ノード、param・dtype・value は入力ノードだけが持てる')
             self._save()
@@ -549,6 +558,13 @@ class Registry:
         if not isinstance(ids, list) or not all(isinstance(i, str) and self._tools.get(i, {}).get('kind') == 'input' for i in ids):
             raise ValidationError('input_ids は、入力ノードの ID の配列')
         return list(dict.fromkeys(ids))
+
+    def _rebuild_py(self, py, patch, inputs):
+        """Python ノードの引数と関数のソースを、コードと入力ノードから作り直す。合わなければ ValidationError"""
+        new = _clean_py_fields(patch, base=py, inputs=inputs)
+        if new['style'] == 'function':   # 旧形式: 入力ノードは、関数の引数に合うものだけ
+            self._check_bindings(new, inputs)
+        return new
 
     @staticmethod
     def _check_bindings(py, inputs):
@@ -566,6 +582,10 @@ class Registry:
             for t in self._tools.values():   # 消した入力ノードは、Python ノードの入力から外す
                 if tid in t.get('input_ids', []):
                     t['input_ids'] = [i for i in t['input_ids'] if i != tid]
+                    try:
+                        t.update(self._rebuild_py(dict(t), {}, [self._tools[i] for i in t['input_ids']]))
+                    except ValidationError:
+                        pass   # 作り直せなくても、削除は止めない（次に保存したときに検査される）
             for e in self._items.values():
                 if tid in e['tool_ids']:
                     e['tool_ids'] = [i for i in e['tool_ids'] if i != tid]
@@ -761,6 +781,28 @@ class Registry:
         from .definitions import unmapped_entries
         r['tools_other'] = unmapped_entries(r['tools'], self._catalog())   # グラフで操作できない項目（読み取り専用で表示）
         return r
+
+    def _persona_target(self, eid):
+        e = self.get(eid)
+        if e['kind'] != 'suborchestrator' or (e.get('definition') or {}).get('kind') != 'agent-md':
+            raise ValidationError('性格を設定できるのは、定義ファイルのあるサブオーケストレーターだけ（猫神さまは personality.md）')
+        return e
+
+    def get_persona(self, eid):
+        """サブオーケストレーターの性格（定義の本文の「性格・話し方」の節。ADR 0044）"""
+        from . import personality
+        e = self._persona_target(eid)
+        return {**personality.read_section(self.get_definition(eid)['prompt']), 'name': e['name']}
+
+    def set_persona(self, eid, data):
+        from . import personality
+        with self._lock:
+            self._persona_target(eid)
+            try:
+                self.set_prompt(eid, personality.write_section(self.get_definition(eid)['prompt'], data))
+            except personality.PersonalityError as ex:
+                raise ValidationError(str(ex))
+            return self.get_persona(eid)
 
     def set_prompt(self, eid, prompt):
         with self._lock:

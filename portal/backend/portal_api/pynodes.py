@@ -6,6 +6,7 @@ Python 標準のデータ型は PY_TYPES。JSON で運べない tuple / set は�
 """
 import ast
 import json
+import keyword
 import math
 import re
 
@@ -152,3 +153,49 @@ def binding_errors(params, inputs):
             errors.append(f'引数 {i.get("param")} に、入力ノードが 2 つつながっている: {seen[i["param"]]}, {i["name"]}')
         seen[i.get('param')] = i['name']
     return errors
+
+
+# ---- 処理だけを書く形式（ADR 0045）----
+def is_function_style(code, func):
+    """コードの先頭の階層に、関数 func の定義があれば、旧形式（関数ごと書く）。なければ「処理だけ」の形式"""
+    try:
+        tree = ast.parse(code or '')
+    except SyntaxError:
+        return False
+    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func for n in tree.body)
+
+
+def input_errors(inputs):
+    """入力ノードから関数の引数を作るときの検査: 引数名の重複、Python の予約語、予約された接頭辞"""
+    errors, seen = [], {}
+    for i in inputs:
+        name = i.get('param')
+        if keyword.iskeyword(name or '') or (name or '').startswith('__neko'):
+            errors.append(f'入力ノード {i["name"]} の引数名 {name} は、引数に使えない（Python の予約語など）')
+        if name in seen:
+            errors.append(f'引数 {name} に、入力ノードが 2 つつながっている: {seen[name]}, {i["name"]}')
+        seen[name] = i['name']
+    return errors
+
+
+def params_from_inputs(inputs):
+    """入力ノード → 関数の引数。型は入力ノードのデータ型、既定値は入力ノードの値（担当が渡せば上書き）"""
+    return [{'name': i['param'], 'type': i['dtype'], 'required': False, 'default': i.get('parsed')} for i in inputs]
+
+
+def build_function(body, params, func='main'):
+    """処理（関数の中身）と引数から、関数のソースを作る。処理の各行を 1 段下げる。構文が不正なら ValueError（行番号は処理の行）"""
+    if not isinstance(body, str) or not body.strip():
+        raise ValueError('処理が空（関数の中身を書く。結果は return で返す）')
+    if len(body) > MAX_CODE:
+        raise ValueError(f'処理は {MAX_CODE} 文字まで')
+    if not isinstance(func, str) or not IDENT_RE.match(func):
+        raise ValueError('関数名は、英数字と _ からなる Python の名前')
+    sig = ', '.join(f'{p["name"]}: {p["type"]}' for p in params)
+    lines = body.replace('\r\n', '\n').replace('\t', '    ').split('\n')
+    src = f'def {func}({sig}):\n' + '\n'.join(('    ' + ln) if ln.strip() else '' for ln in lines) + '\n'
+    try:
+        ast.parse(src)
+    except SyntaxError as e:
+        raise ValueError(f'構文エラー（処理の {max((e.lineno or 2) - 1, 1)} 行目）: {e.msg}') from None
+    return src

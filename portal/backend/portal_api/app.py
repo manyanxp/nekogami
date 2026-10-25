@@ -220,6 +220,17 @@ def put_theme(body: dict[str, Any] = Body_):
         raise ValidationError(str(e))
 
 
+@router.get('/entities/{id}/personality')
+def get_entity_personality(id: str = Depends(entity_id), reg: Registry = Depends(get_registry)):
+    """サブオーケストレーターの性格・口調（定義の本文の「性格・話し方」の節）"""
+    return reg.get_persona(id)
+
+
+@router.put('/entities/{id}/personality')
+def put_entity_personality(id: str = Depends(entity_id), body: dict[str, Any] = Body_, reg: Registry = Depends(get_registry)):
+    return reg.set_persona(id, body)
+
+
 @router.get('/admin/personality')
 def get_personality(reg: Registry = Depends(get_registry)):
     return personality.read(reg.project_dir)

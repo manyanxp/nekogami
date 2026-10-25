@@ -269,6 +269,72 @@ class RegistryTest(Base):
         self.reg.delete_tool(node['id'])
         self.assertNotIn('llm-local-qwen', self._agent_text('.claude/agents/x.md'))
 
+    def test_python_node_body_style(self):
+        """処理だけを書く Python ノード: 入力ノードをつなぐと、引数が自動で決まり、関数が自動生成される（ADR 0045）"""
+        py = self.reg.create_tool({'name': 'calc2', 'kind': 'python', 'code': 'return a * 2'})
+        self.assertEqual((py['style'], py['params']), ('body', []))
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'empty', 'kind': 'python', 'code': '  \n'})
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'syn', 'kind': 'python', 'code': 'return ('})
+        a = self.reg.create_tool({'name': 'in-a', 'kind': 'input', 'param': 'a', 'dtype': 'int', 'value': '21'})
+        b = self.reg.create_tool({'name': 'in-b', 'kind': 'input', 'param': 'b', 'dtype': 'list', 'value': '[1, 2]'})
+        # 関数の引数を持たなくても、つなげる。つなぐと引数と関数が自動で決まる
+        self.reg.update_tool(py['id'], {'input_ids': [a['id'], b['id']]})
+        got = next(t for t in self.reg.list_tools() if t['id'] == py['id'])
+        self.assertEqual([(p['name'], p['type'], p['default']) for p in got['params']], [('a', 'int', 21), ('b', 'list', [1, 2])])
+        self.assertEqual(got['source'], 'def main(a: int, b: list):\n    return a * 2\n')
+        # 入力ノードの値・型を変えると、つなぎ先の引数も変わる
+        self.reg.update_tool(a['id'], {'dtype': 'float', 'value': '1.5'})
+        got = next(t for t in self.reg.list_tools() if t['id'] == py['id'])
+        self.assertEqual((got['params'][0]['type'], got['params'][0]['default']), ('float', 1.5))
+        self.assertIn('def main(a: float, b: list)', got['source'])
+        # 処理を書き換えても、引数は入力ノードのまま。引数名の重複・予約語は断る
+        self.reg.update_tool(py['id'], {'code': 'x = a + len(b)\nreturn x'})
+        self.assertIn('    x = a + len(b)\n    return x\n', next(t for t in self.reg.list_tools() if t['id'] == py['id'])['source'])
+        dup = self.reg.create_tool({'name': 'in-a2', 'kind': 'input', 'param': 'a', 'dtype': 'int', 'value': '1'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(py['id'], {'input_ids': [a['id'], b['id'], dup['id']]})
+        kw = self.reg.create_tool({'name': 'in-kw', 'kind': 'input', 'param': 'class', 'dtype': 'int', 'value': '1'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(py['id'], {'input_ids': [kw['id']]})
+        # 入力ノードを消すと、引数も消える
+        self.reg.delete_tool(b['id'])
+        got = next(t for t in self.reg.list_tools() if t['id'] == py['id'])
+        self.assertEqual([p['name'] for p in got['params']], ['a'])
+        self.assertIn('def main(a: float):', got['source'])
+
+    def test_suborchestrator_personality(self):
+        """サブオーケストレーターの性格・口調は、定義の本文の「性格・話し方」の節に書く（ADR 0044）"""
+        self.reg.sync_builtin('http://x')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text('{}')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        sub = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'ps-sub', 'parent_id': neko['id'], 'prompt': '# 役割\n調べる。\n\n## 守ること\n- 事実を書く\n'})
+        ag = self.reg.create_claude({'kind': 'agent', 'name': 'ps-ag', 'parent_id': neko['id']})
+        self.assertFalse(self.reg.get_persona(sub['id'])['exists'])
+        r = self.reg.set_persona(sub['id'], {'first_person': 'わし', 'address': '小僧', 'tone': '〜じゃ', 'traits': '落ち着いている'})
+        self.assertEqual((r['exists'], r['first_person'], r['address'], r['tone'], r['traits']), (True, 'わし', '小僧', '〜じゃ', '落ち着いている'))
+        text = self.reg.get_definition(sub['id'])['prompt']
+        self.assertIn('## 性格・話し方', text)
+        self.assertIn('## 守ること', text)                                    # ほかの節は残る
+        self.reg.set_persona(sub['id'], {'first_person': 'ぼく', 'address': 'きみ', 'tone': 'です', 'traits': ''})
+        self.assertEqual(self.reg.get_definition(sub['id'])['prompt'].count('## 性格'), 1)   # 置き換えで、節は増えない
+        self.assertEqual(self.reg.get_persona(sub['id'])['first_person'], 'ぼく')
+        # 手で書いた「## 性格」の箇条書きは、性格の文章として読み、保存すると節に置き換わる
+        self.reg.set_prompt(sub['id'], '# 役割\nx\n\n## 性格\n- 長女\n- 緑茶が好き\n')
+        p = self.reg.get_persona(sub['id'])
+        self.assertTrue(p['exists'])
+        self.assertIn('緑茶が好き', p['traits'])
+        self.reg.set_persona(sub['id'], {**p})
+        self.assertIn('緑茶が好き', self.reg.get_definition(sub['id'])['prompt'])
+        self.assertEqual(self.reg.get_definition(sub['id'])['prompt'].count('## 性格'), 1)
+        for bad in ({'tone': ''}, {'traits': '# 見出し'}, {'first_person': 'あ' * 17}):
+            with self.assertRaises(ValidationError):
+                self.reg.set_persona(sub['id'], {'first_person': 'わし', 'address': '小僧', 'tone': 'です', 'traits': '', **bad})
+        with self.assertRaises(ValidationError):
+            self.reg.set_persona(ag['id'], {})                                 # サブオーケストレーター以外は不可
+
     def test_callees_and_auto_spawn(self):
         """担当 → 担当の「呼ぶ」接続と、担当の自動作成のスイッチ（ADR 0043）。どちらも定義ファイルの tools に反映される"""
         self.reg.sync_builtin('http://x')
@@ -354,11 +420,13 @@ class RegistryTest(Base):
         py = self.reg.create_tool({'name': 'calc', 'kind': 'python', 'code': code, 'func': 'main'})
         self.assertEqual([(p['name'], p['type'], p['required']) for p in py['params']], [('n', 'int', True), ('tags', 'list', False)])
         self.assertEqual(py['doc'], '合計')
-        for bad in ({'code': 'def main(n): pass'}, {'code': 'def other(n: int): pass'}, {'code': 'def main(:'}):
+        self.assertEqual(py['style'], 'function')   # 関数ごと書いた旧形式は、そのまま動く（ADR 0045）
+        for bad in ({'code': 'def main(n): pass'}, {'code': 'def main(:'}):
             with self.assertRaises(ValidationError):
                 self.reg.update_tool(py['id'], bad)
-        with self.assertRaises(ValidationError):
-            self.reg.create_tool({'name': 'p2', 'kind': 'python', 'code': 'x = 1'})
+        with self.assertRaises(ValidationError):   # 処理が空なら断る。`x = 1` のような処理だけは、新形式として受け付ける
+            self.reg.create_tool({'name': 'p2', 'kind': 'python', 'code': '  '})
+        self.assertEqual(self.reg.create_tool({'name': 'p3', 'kind': 'python', 'code': 'x = 1'})['style'], 'body')
         i = self.reg.create_tool({'name': 'n-in', 'kind': 'input', 'param': 'n', 'dtype': 'int', 'value': '42'})
         with self.assertRaises(ValidationError):
             self.reg.create_tool({'name': 'bad-in', 'kind': 'input', 'param': 'n', 'dtype': 'int', 'value': '4.2'})

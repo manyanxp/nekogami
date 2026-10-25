@@ -274,6 +274,8 @@ dialog textarea { display: block; width: 100%; margin-top: 3px; color: var(--tex
 .gnode .port { width: 12px; height: 12px; background: var(--panel2); border: 2px solid var(--muted); } .gnode .port:hover { background: var(--accent); border-color: var(--accent); }
 #graph .edge.tool path.react-flow__edge-path { stroke: var(--tool); } #graph .edge.tree path.react-flow__edge-path { stroke: var(--suborchestrator); }
 #graph .react-flow__edge.selected path.react-flow__edge-path { stroke: var(--accent); stroke-width: 3.5; }
+/* 選択中のノードにつながる、猫神さまからの線（ADR 0045）。種類ごとの色のまま、太くして濃くする */
+#graph .edge.hl path.react-flow__edge-path { stroke-width: 5px; filter: drop-shadow(0 0 3px var(--orchestrator)); }
 #graph .react-flow__arrowhead polyline, #graph .react-flow__arrowhead path { fill: var(--muted); stroke: var(--muted); }
 
 /* アイコン（ADR 0032） */
@@ -324,6 +326,19 @@ button .ico:only-child, .iconbtn .ico { margin-right: 0; }
 .perm-row label.risky { color: var(--warn); }
 .lg.dir { background: #4cc9d6; }
 
+/* ノードの参照用プロパティ（ADR 0044）と、管理ページ左の列の開閉 */
+.gnode .props { font-size: 10.5px; color: var(--muted); line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.layout.closed { grid-template-columns: 1fr; }
+.layout.closed aside { display: none; }
+.aside-toggle { display: inline-flex; align-items: center; gap: 4px; }
+/* プロパティごとの開閉（Fold）。見出しをクリックして開閉する */
+.fold > details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+.fold > details > summary::-webkit-details-marker { display: none; }
+.fold > details > summary::before { content: '▸'; color: var(--muted); font-size: 12px; transition: transform .12s; }
+.fold > details[open] > summary::before { transform: rotate(90deg); }
+.fold > details > summary h2 { margin: 0; display: inline; }
+.fold-body { margin-top: 8px; }
+
 /* 担当 → 担当の「呼ぶ」ワイヤー（上下のピン。ADR 0043） */
 #graph .edge.call path.react-flow__edge-path { stroke: #e07a5f; }
 .gnode .port.call { border-color: #e07a5f; }
@@ -334,6 +349,10 @@ button .ico:only-child, .iconbtn .ico { margin-right: 0; }
 .gnode.input .head { background: #8bc96a; }
 .lg.py { background: #f2b84c; }
 .lg.input { background: #8bc96a; }
+.param-info span { display: flex; flex-wrap: wrap; gap: 4px; }
+.param-info code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.src summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.src pre { margin: 4px 0; padding: 8px; background: var(--panel2); border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre; }
 .llm-prompt.code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 #graph .edge.input path.react-flow__edge-path { stroke: #8bc96a; }
 

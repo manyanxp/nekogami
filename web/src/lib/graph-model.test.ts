@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MODEL_CHOICES, buildGraph, canConnect, isDescendant, isRiskyDir, modelOptions, parentChoices, permLabels } from './graph-model';
+import { MODEL_CHOICES, buildGraph, canConnect, entityDetail, entityProps, highlightEdges, isDescendant, isRiskyDir, modelOptions, parentChoices, permLabels } from './graph-model';
 import type { Entity, Tool } from './types';
 
 const E = (id: string, kind: Entity['kind'], name: string, parent_id: string | null = null, o: Partial<Entity> = {}): Entity =>
@@ -88,9 +88,14 @@ describe('Python ノードと入力ノード', () => {
     expect(canConnect(e, [py(), inp('i1', 'n', 'str')], 'i1', 'p1').ok).toBe(false);
     expect(canConnect(e, [py(['i1']), inp('i1', 'n', 'int'), inp('i2', 'n', 'int')], 'i2', 'p1').ok).toBe(false);
   });
+  it('処理だけの形式: 引数が無くても入力ノードをつなげる（重複だけ断る）', () => {
+    const body: Tool = { ...py(), style: 'body', params: [] };
+    expect(canConnect([], [body, inp('i1', 'zz', 'str')], 'i1', 'p1')).toMatchObject({ ok: true, action: 'input' });
+    expect(canConnect([], [{ ...body, input_ids: ['i1'] }, inp('i1', 'zz', 'str'), inp('i2', 'zz', 'int')], 'i2', 'p1').ok).toBe(false);
+  });
   it('グラフ: 表示と、入力 → Python の線', () => {
     const g = buildGraph([], [py(['i1']), inp('i1', 'n', 'int')]);
-    expect(g.nodes.find((n) => n.id === 'p1')!.sub).toBe('Python · main(n, s)');
+    expect(g.nodes.find((n) => n.id === 'p1')!.sub).toBe('Python · (n, s)');
     expect(g.nodes.find((n) => n.id === 'i1')!.sub).toBe('入力 · n: int');
     expect(g.edges).toContainEqual({ id: 'input:i1>p1', type: 'input', from: 'i1', to: 'p1' });
   });
@@ -140,5 +145,42 @@ describe('担当 → 担当（呼ぶ）の接続', () => {
   it('グラフに「呼ぶ」の線が出る', () => {
     const g = buildGraph([E('o', 'orchestrator', 'neko'), A('a', ['b']), A('b')], []);
     expect(g.edges).toContainEqual({ id: 'call:a>b', type: 'call', from: 'a', to: 'b' });
+  });
+});
+
+describe('選択中のノードの線の強調', () => {
+  const es = [E('o', 'orchestrator', 'neko'), E('s', 'suborchestrator', 's', 'o', { tool_ids: ['p'] }), E('a', 'agent', 'a', 's'), E('x', 'agent', 'x', 'o')];
+  const ts: Tool[] = [{ id: 'p', name: 'py', kind: 'python', pos: null, input_ids: ['i'] }, { id: 'i', name: 'in', kind: 'input', pos: null }];
+  it('担当: 猫神さまからの親子の線', () => {
+    expect([...highlightEdges(es, ts, 'a')].sort()).toEqual(['tree:o>s', 'tree:s>a']);
+    expect(highlightEdges(es, ts, 'o').size).toBe(0);
+  });
+  it('ツール・入力: それを使う担当までの線', () => {
+    expect([...highlightEdges(es, ts, 'p')].sort()).toEqual(['tool:s>p', 'tree:o>s']);
+    expect([...highlightEdges(es, ts, 'i')].sort()).toEqual(['input:i>p', 'tool:s>p', 'tree:o>s']);
+  });
+  it('未選択・存在しない ID は空', () => {
+    expect(highlightEdges(es, ts, null).size + highlightEdges(es, ts, 'zz').size).toBe(0);
+  });
+});
+
+describe('ノードの参照用プロパティ', () => {
+  const full = (over: Partial<Entity> = {}): Entity => ({ ...E('a', 'agent', 'ag', 'o'), model: 'haiku', description: '調べる担当', tool_ids: ['t1', 't2'], tags: ['x'], definition: { kind: 'agent-md', path: '.claude/agents/g/ag.md' } as Entity['definition'], ...over });
+  it('ツール数・配下の数・状態を出す。プロンプトは含めない', () => {
+    const es = [E('o', 'orchestrator', 'neko'), full(), E('c', 'subagent', 'c', 'a')];
+    expect(entityProps(es[1], es)).toEqual(['ツール 2 · 配下 1']);
+    expect(entityProps(full({ enabled: false, callee_ids: ['c'], auto_spawn: true, definition: null }), es)).toEqual(['ツール 2 · 配下 1', '無効 · 定義なし · 呼べる 1 · 自動作成可']);
+  });
+  it('ツールチップは、説明・モデル・親・ツール名・定義のパスを含む', () => {
+    const es = [E('o', 'orchestrator', 'neko'), full()];
+    const tools: Tool[] = [{ id: 't1', name: 'Read', kind: 'builtin', pos: null }, { id: 't2', name: 'Grep', kind: 'builtin', pos: null }];
+    const d = entityDetail(es[1], es, tools);
+    for (const w of ['調べる担当', 'モデル: haiku', '親: neko', 'ツール: Read, Grep', 'タグ: x', '.claude/agents/g/ag.md']) expect(d).toContain(w);
+  });
+  it('グラフのノードに props と detail が付く', () => {
+    const es = [E('o', 'orchestrator', 'neko'), full()];
+    const n = buildGraph(es, []).nodes.find((x) => x.id === 'a')!;
+    expect(n.props).toEqual(['ツール 2 · 配下 0']);
+    expect(n.detail).toContain('ag（agent）');
   });
 });
