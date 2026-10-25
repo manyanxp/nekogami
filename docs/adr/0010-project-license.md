@@ -8,7 +8,7 @@
 
 ## 決定
 - ルートに [LICENSE](../../LICENSE)（MIT）を置く。LICENSE 末尾に「本ライセンスは第三者のソフトウェア・サービスには及ばない」旨の注記を付け、[NOTICE.md](../../NOTICE.md) に有料・独自条件のもの（Claude Code、Claude Agent SDK、Claude API、Azure）を明記する。
-- 著作権表示は暫定で "Azure Sage contributors"。個人名や組織名にする場合は LICENSE を直す。
+- 著作権表示は "manyanxp"（個人。2026-10-25 に、暫定の "Azure Sage contributors" から変更）。他の人の貢献を受けるようになったら、"NekoGamiSama contributors" への変更や貢献の条件を検討する。画像・アニメーション素材は対象外（NOTICE.md）
 - dompurify は MPL-2.0 / Apache-2.0 の選択式のため Apache-2.0 を選択する。
 
 ## 理由・検討した代替案
