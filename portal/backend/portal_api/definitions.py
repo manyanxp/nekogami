@@ -10,6 +10,7 @@
 frontmatter は、編集するキー（description / model / tools）だけを差し替え、ほかの行（effort / color / disallowedTools など）は
 そのまま残す。permissionMode など権限に関わるキーは扱わない。
 """
+import errno
 import json
 import os
 import re
@@ -25,6 +26,7 @@ TOOL_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_*.-]{0,127}(\([A-Za-z0-9_, .*-]{0,200
 ROLES = ('suborchestrator', 'agent', 'subagent')
 # 書き込み・実行ができるツール。新しく足すときは確認（allow_dangerous）が要る（ADR 0002 の読み取り中心の方針）
 DANGEROUS_TOOLS = ('Bash', 'Write', 'Edit', 'NotebookEdit')
+LLM_PREFIX = 'llm-'   # LLM ノード（ローカル LLM）は、Agent Console が MCP サーバー `llm-<名前>` として公開する（ADR 0040）
 DIR_PREFIX = 'dir-'   # ディレクトリのノードは、Agent Console が MCP サーバー `dir-<名前>` として公開する（ADR 0037）
 MAX_PROMPT = 50_000
 KEY_RE = re.compile(r'^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$')
@@ -133,6 +135,8 @@ def entry_node(entry):
         server = base.split('__')[1] if base.count('__') >= 1 else ''
         if server.startswith(DIR_PREFIX) and len(server) > len(DIR_PREFIX):
             return server[len(DIR_PREFIX):]   # ディレクトリのノード（`mcp__dir-<名前>__*`）。ノード名は <名前>
+        if server.startswith(LLM_PREFIX) and len(server) > len(LLM_PREFIX):
+            return server[len(LLM_PREFIX):]   # LLM ノード（`mcp__llm-<名前>__*`）
         return server or None
     return base
 
@@ -140,6 +144,8 @@ def entry_node(entry):
 def node_entry(name, kind):
     if kind == 'directory':
         return f'mcp__{DIR_PREFIX}{name}__*'
+    if kind == 'llm':
+        return f'mcp__{LLM_PREFIX}{name}__*'
     return f'mcp__{name}__*' if kind == 'mcp' else name
 
 
@@ -232,7 +238,13 @@ class DefinitionStore:
         fd, tmp = tempfile.mkstemp(dir=p.parent, suffix='.tmp')
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(text)
-        os.replace(tmp, p)
+        try:
+            os.replace(tmp, p)
+        except OSError as e:
+            if e.errno != errno.EBUSY:   # ファイル単体のバインドマウント（compose の CLAUDE.md）は、置き換えられない。その場で書く
+                raise
+            p.write_text(text, encoding='utf-8')
+            os.unlink(tmp)
 
     @staticmethod
     def _check(description=None, model=None, tools=None, prompt=None):

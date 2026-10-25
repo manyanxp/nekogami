@@ -146,8 +146,33 @@ export function Inspector({ sel, entities, tools, guarded, reload, onRename, emb
         {e.definition ? <DefinitionPanel key={e.id} e={e} guarded={guarded} /> : <p className="hint">定義ファイルのないエンティティです（Docker などで外部管理）。プロンプトとツールは台帳では編集できません。</p>}
       </>}
       {t && <><div className="row"><span className="badge">{t.kind}</span>{t.name}</div><div className="row"><b>接続数</b>{entities.filter((x) => x.tool_ids.includes(t.id)).length}</div>{t.description && <p className="hint">{t.description}</p>}
+        {t.kind === 'llm' && <LlmPanel key={t.id} t={t} connected={entities.filter((x) => x.tool_ids.includes(t.id)).map((x) => x.name)} guarded={guarded} reload={reload} />}
         {t.kind === 'directory' && <DirectoryPanel key={t.id} t={t} connected={entities.filter((x) => x.tool_ids.includes(t.id)).map((x) => x.name)} guarded={guarded} reload={reload} />}</>}
     </section>
+  );
+}
+
+/** LLM ノード（ローカル LLM）の編集: モデル名・プロンプト（システムプロンプト）・温度・出力の長さ。Claude のモデルは関係しない */
+function LlmPanel({ t, connected, guarded, reload }: { t: Tool; connected: string[]; guarded: <T>(fn: () => Promise<T>) => Promise<T | undefined>; reload: () => Promise<void> }) {
+  const toast = useToast();
+  const [model, setModel] = useState(t.model || ''), [prompt, setPrompt] = useState(t.prompt || '');
+  const [temp, setTemp] = useState(String(t.temperature ?? 0.7)), [maxTok, setMaxTok] = useState(String(t.max_tokens ?? 1024));
+  const dirty = model !== (t.model || '') || prompt !== (t.prompt || '') || Number(temp) !== (t.temperature ?? 0.7) || Number(maxTok) !== (t.max_tokens ?? 1024);
+  return (
+    <div className="defpanel">
+      <div className="row"><b>モデル</b><input value={model} onChange={(e) => setModel(e.target.value)} maxLength={80} aria-label="Ollama のモデル名" /></div>
+      <label>プロンプト（システムプロンプト。保存すると、次の質問から効きます）
+        <textarea className="llm-prompt prompt" rows={10} spellCheck={false} maxLength={8000} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="あなたは…です。" />
+      </label>
+      <div className="llm-params">
+        <label>温度<input type="number" min={0} max={2} step={0.1} value={temp} onChange={(e) => setTemp(e.target.value)} style={{ width: 70 }} /></label>
+        <label>出力の長さ（トークン）<input type="number" min={16} max={4096} step={16} value={maxTok} onChange={(e) => setMaxTok(e.target.value)} style={{ width: 90 }} /></label>
+      </div>
+      <p className="hint">つないである担当: {connected.join(', ') || '（なし）'}。文脈が短い（16K）ので、プロンプトは短くします。</p>
+      <button className="primary" disabled={!dirty} onClick={() => void guarded(async () => {
+        await api.updateTool(t.id, { model, prompt, temperature: Number(temp), max_tokens: Math.trunc(Number(maxTok)) }); toast(`${t.name} を保存しました`); await reload();
+      })}>保存</button>
+    </div>
   );
 }
 

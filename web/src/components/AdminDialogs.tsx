@@ -7,7 +7,7 @@ import { KIND_LABEL } from '@/lib/model';
 import type { DelegationRow, DirPerms, Entity, Kind, Overview, Tool } from '@/lib/types';
 import { ModelSelect } from './AdminCards';
 
-export type AddSpec = { kind: Kind | 'tool' | 'directory'; parentId?: string | null; at?: { x: number; y: number } | null };
+export type AddSpec = { kind: Kind | 'tool' | 'directory' | 'llm'; parentId?: string | null; at?: { x: number; y: number } | null };
 const NO_PERMS: DirPerms = { list: false, read: false, write: false, delete: false, exec: false };
 
 /** ノード・ツールの追加。エージェントは .claude/agents/ に定義ファイルが作られる */
@@ -16,12 +16,13 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
   const [perms, setPerms] = useState<DirPerms>(NO_PERMS);
   const [err, setErr] = useState('');
   const isDir = spec?.kind === 'directory';
-  const isTool = spec?.kind === 'tool' || isDir;
+  const isLlm = spec?.kind === 'llm';
+  const isTool = spec?.kind === 'tool' || isDir || isLlm;
   const opts = spec && !isTool ? parentChoices(entities, spec.kind as Kind) : [];
   useEffect(() => {
     if (!spec) return;
     const pre = opts.find((o) => o.id === (spec.parentId || selectedId));
-    setF({ name: '', description: '', parent_id: pre?.id || opts[0]?.id || '', model: '', prompt: '', tool_kind: 'custom', path: '' }); setPerms(NO_PERMS); setErr('');
+    setF({ name: '', description: '', parent_id: pre?.id || opts[0]?.id || '', model: spec.kind === 'llm' ? 'qwen3:8b' : '', prompt: '', tool_kind: 'custom', path: '' }); setPerms(NO_PERMS); setErr('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec]);
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -30,6 +31,7 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
     const pos = spec?.at ? { x: Math.round(spec.at.x / 10) * 10, y: Math.round(spec.at.y / 10) * 10 } : undefined;
     try {
       if (isDir) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'directory', path: f.path.trim(), perms, pos });
+      else if (isLlm) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'llm', model: f.model.trim(), prompt: f.prompt, pos });
       else if (isTool) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: f.tool_kind, pos });
       else await api.createAgent({ kind: spec!.kind, name: f.name.trim(), description: f.description.trim(), parent_id: f.parent_id || null, model: f.model, prompt: f.prompt.trim(), pos });
       onClose(); await onDone();
@@ -40,8 +42,8 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
       <Dialog.Portal><Dialog.Overlay className="dlg-overlay" />
         <Dialog.Content className="dlg" aria-describedby={undefined}>
           <form onSubmit={submit}>
-            <Dialog.Title asChild><h2>{isDir ? 'ディレクトリを追加' : isTool ? 'ツールを追加' : `${spec ? KIND_LABEL[spec.kind as Kind] : ''}を追加（Claude のエージェント定義を作成）`}</h2></Dialog.Title>
-            <label>名前<input value={f.name} onChange={(e) => set('name', e.target.value)} required pattern={isDir ? '[A-Za-z0-9][A-Za-z0-9\\-]{0,39}' : '[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}'} placeholder="例: cost-agent" /></label>
+            <Dialog.Title asChild><h2>{isLlm ? 'ローカル LLM を追加' : isDir ? 'ディレクトリを追加' : isTool ? 'ツールを追加' : `${spec ? KIND_LABEL[spec.kind as Kind] : ''}を追加（Claude のエージェント定義を作成）`}</h2></Dialog.Title>
+            <label>名前<input value={f.name} onChange={(e) => set('name', e.target.value)} required pattern={isDir || isLlm ? '[A-Za-z0-9][A-Za-z0-9\\-]{0,39}' : '[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}'} placeholder="例: cost-agent" /></label>
             {!isTool && <label>親<select value={f.parent_id} onChange={(e) => set('parent_id', e.target.value)}>{opts.map((o) => <option key={o.id} value={o.id}>{o.name}（{KIND_LABEL[o.kind]}）</option>)}</select></label>}
             {isDir && <>
               <label>場所（作業領域 <code>workspace/</code> からの相対パス）<input value={f.path} onChange={(e) => set('path', e.target.value)} required placeholder="例: notes/docs" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*(/[A-Za-z0-9][A-Za-z0-9._\-]*)*" /></label>
@@ -49,7 +51,11 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
                 <div className="perm-row">{DIR_PERMS.map((p) => <label key={p.key} className={RISKY_DIR_PERMS.includes(p.key) ? 'risky' : ''}><input type="checkbox" checked={perms[p.key]} onChange={(e) => setPerms({ ...perms, [p.key]: e.target.checked })} />{p.label}</label>)}</div>
               </fieldset>
               <p className="hint">作ったら、エージェントの左の ● へワイヤーでつなぐと、そのエージェントだけが使えます。</p></>}
-            {isTool && !isDir && <label>ツールの種類<select value={f.tool_kind} onChange={(e) => set('tool_kind', e.target.value)}><option value="custom">custom</option><option value="mcp">mcp</option><option value="builtin">builtin</option></select></label>}
+            {isLlm && <>
+              <label>モデル名（Ollama。<code>ollama pull</code> で取得済みのもの）<input value={f.model} onChange={(e) => set('model', e.target.value)} required placeholder="例: qwen3:8b" pattern="[A-Za-z0-9][A-Za-z0-9._:/\-]{0,79}" /></label>
+              <label>プロンプト（システムプロンプト。空でもよい）<textarea className="llm-prompt" rows={6} maxLength={8000} value={f.prompt} onChange={(e) => set('prompt', e.target.value)} placeholder="あなたは…です。短く答えます。" /></label>
+              <p className="hint">作ったら、エージェントの左の ● へワイヤーでつなぐと、そのエージェントが <code>ask</code> ツールで質問できます。温度や出力の長さは、作ったあとの編集で変えられます。</p></>}
+            {isTool && !isDir && !isLlm && <label>ツールの種類<select value={f.tool_kind} onChange={(e) => set('tool_kind', e.target.value)}><option value="custom">custom</option><option value="mcp">mcp</option><option value="builtin">builtin</option></select></label>}
             {!isTool && <label>モデル<ModelSelect value={f.model} onChange={(v) => set('model', v)} /></label>}
             <label>説明<input value={f.description} maxLength={300} onChange={(e) => set('description', e.target.value)} /></label>
             {!isTool && <label>プロンプト（空なら雛形を使う）<textarea rows={6} maxLength={50000} value={f.prompt} onChange={(e) => set('prompt', e.target.value)} placeholder="あなたは…です。" /></label>}
@@ -71,7 +77,7 @@ export function DelegationDialog({ open, row, overview, entities, onClose, onDon
   useEffect(() => {
     if (!open) return;
     setF({
-      name: row?.name || '', lreg: true, ldesc: ent?.description ?? row?.description ?? '', lmodel: ent?.model || 'sonnet', lenabled: ent ? ent.enabled : true,
+      name: row?.name || '', lreg: true, ldesc: ent?.description ?? row?.description ?? '', lmodel: row?.local_model ? '' : ent?.model || 'sonnet', lenabled: ent ? ent.enabled : true,
       dwired: true, dtype: wasWired ? row!.type : 'agent',
       agent: row?.agent || row?.target?.name || (defined.some((x) => x.name === row?.name) ? row!.name : defined[0]?.name || ''),
       dir: row?.dir || '', ddesc: row?.description || (row ? ent?.description || '' : ''),
@@ -117,7 +123,9 @@ export function DelegationDialog({ open, row, overview, entities, onClose, onDon
               <legend><label className="chk"><input type="checkbox" checked={f.lreg || lockReg} disabled={lockReg} onChange={(e) => set('lreg', e.target.checked)} /> 台帳に登録する（サブオーケストレーターとして、猫神さまの配下）</label></legend>
               <p className="hint">{note}</p>
               <label>台帳の説明<input value={f.ldesc} maxLength={500} onChange={(e) => set('ldesc', e.target.value)} /></label>
-              <label>モデル<ModelSelect value={f.lmodel} onChange={(v) => set('lmodel', v)} /></label>
+              {row?.local_model
+                ? <div className="row"><b>モデル</b>ローカル LLM: <code>{row.local_model}</code><span className="hint">（Claude のモデルは使いません）</span></div>
+                : <label>モデル<ModelSelect value={f.lmodel} onChange={(v) => set('lmodel', v)} /></label>}
               <label className="chk"><input type="checkbox" checked={f.lenabled} onChange={(e) => set('lenabled', e.target.checked)} /> 有効</label>
             </fieldset>
             <fieldset className={f.dwired ? '' : 'off'}>

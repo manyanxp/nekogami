@@ -323,3 +323,10 @@ button .ico:only-child, .iconbtn .ico { margin-right: 0; }
 .perm-row label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .perm-row label.risky { color: var(--warn); }
 .lg.dir { background: #4cc9d6; }
+
+/* LLM ノード（ローカル LLM。ADR 0040） */
+.gnode.llm .head { background: #b48cf2; }
+.lg.llm { background: #b48cf2; }
+.llm-prompt { width: 100%; font: inherit; resize: vertical; }
+.llm-params { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0; }
+.llm-params label { display: inline-flex; align-items: center; gap: 4px; }

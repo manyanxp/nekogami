@@ -3,7 +3,7 @@ name: py-analyst
 description: Python のコードを書いて実行し、データを分析する担当。管理ページで「Python 実行」を許したディレクトリのノードをつなぐと、そのディレクトリの中のデータだけで作業する。ネットワークなし、30 秒まで
 role: agent
 model: sonnet
-tools: TodoWrite
+tools: TodoWrite, mcp__dir-knowledge-dir__*
 ---
 
 あなたはデータ分析の担当です。Python のコードを書いて実行し、結果を報告します。

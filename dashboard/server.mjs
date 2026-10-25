@@ -17,6 +17,7 @@ import { readTheme } from './theme.mjs';
 import { z } from 'zod';
 import { DIR_PREFIX, buildDirServers, checkDirAccess, loadDirNodes } from './fs-tools.mjs';
 import { runPython } from './py-exec.mjs';
+import { LLM_PREFIX, buildLlmServers, checkLlmAccess, loadLlmNodes } from './llm-tools.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(HERE, '..');
@@ -26,6 +27,8 @@ const THEME_FILE = process.env.THEME_FILE || path.join(PROJECT_DIR, 'portal', 'd
 const HOST = process.env.TRACE_HOST || '127.0.0.1';
 // ディレクトリのノード（ADR 0037）が指す作業領域。ノードの path は、ここからの相対パス
 const FS_ROOT = path.resolve(process.env.FS_ROOT || path.join(PROJECT_DIR, 'workspace'));
+// LLM ノード（ADR 0040）が呼ぶローカル LLM（Ollama）。compose の `local-llm` プロファイルで起動する
+const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://ollama:11434').replace(/\/+$/, '');
 // Python の実行（ADR 0038）のジョブ置き場。実行役（py-sandbox）と共有する
 const JOBS_DIR = path.resolve(process.env.SANDBOX_JOBS || path.join(PROJECT_DIR, 'sandbox', 'jobs'));
 const CHAT_MODEL = process.env.CHAT_MODEL || undefined; // 未指定なら .claude/settings.json の model
@@ -162,9 +165,12 @@ async function canUseTool(toolName, input, target, user, opts) {
   } else if (toolName.startsWith('mcp__azure__')) {
     allowed = ALLOW_AZURE_MCP;
     reason = allowed ? '' : 'Azure MCP はこのサーバーで無効化されています (ALLOW_AZURE_MCP=0)';
-  } else if (toolName.startsWith(`mcp__${DIR_PREFIX}`)) {   // ディレクトリのノード。権限と、呼んだ担当の接続の両方を確かめる
+  } else if (toolName.startsWith(`mcp__${DIR_PREFIX}`) || toolName.startsWith(`mcp__${LLM_PREFIX}`)) {   // ディレクトリ・LLM のノード。ノードの権限と、呼んだ担当の接続の両方を確かめる
     const callerName = opts?.agentID ? agentTypeById.get(opts.agentID) : chatTargets().get(target)?.agent;
-    const r = checkDirAccess({ toolName, nodes: loadDirNodes(REGISTRY_FILE), callerName, callerTools: loadAgentTools()[callerName] });
+    const callerTools = loadAgentTools()[callerName];
+    const r = toolName.startsWith(`mcp__${DIR_PREFIX}`)
+      ? checkDirAccess({ toolName, nodes: loadDirNodes(REGISTRY_FILE), callerName, callerTools })
+      : checkLlmAccess({ toolName, nodes: loadLlmNodes(REGISTRY_FILE), callerName, callerTools });
     allowed = r.ok;
     reason = r.reason || '';
   } else if (toolName === 'Write' || toolName === 'Edit') {
@@ -243,7 +249,10 @@ async function runChat(text, target, user) {
         model: CHAT_MODEL,
         includePartialMessages: true,
         abortController: ac,
-        mcpServers: buildDirServers({ sdk, z, nodes: loadDirNodes(REGISTRY_FILE), root: FS_ROOT, run: (box, code) => runPython({ box, code, jobsDir: JOBS_DIR }) }),   // 権限のある操作だけ公開する
+        mcpServers: {   // 権限のある操作だけ公開する
+          ...buildDirServers({ sdk, z, nodes: loadDirNodes(REGISTRY_FILE), root: FS_ROOT, run: (box, code) => runPython({ box, code, jobsDir: JOBS_DIR }) }),
+          ...buildLlmServers({ sdk, z, nodes: loadLlmNodes(REGISTRY_FILE), baseUrl: OLLAMA_URL }),
+        },
         canUseTool: (n, i, o) => canUseTool(n, i, target, user, o),
       },
     });

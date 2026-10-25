@@ -171,12 +171,13 @@ function Admin() {
             {(['suborchestrator', 'agent', 'subagent'] as const).map((k) => <button key={k} onClick={() => setAdding({ kind: k })}><Icon name="add" size={18} />{KIND_LABEL[k]}</button>)}
             <button onClick={() => setAdding({ kind: 'tool' })}><Icon name="tool" size={18} />ツール</button>
             <button onClick={() => setAdding({ kind: 'directory' })}><Icon name="folder" size={18} />ディレクトリ</button>
+            <button onClick={() => setAdding({ kind: 'llm' })}><Icon name="chat" size={18} />ローカル LLM</button>
             <span className="sep" />
             <button className="danger" disabled={!selDeletable} onClick={() => void deleteSelected()}><Icon name="delete" size={18} />選択を削除 (Del)</button>
             <button onClick={() => setFitKey((k) => k + 1)}><Icon name="expand" size={18} />全体表示</button>
             <button onClick={resetLayout} title="手動配置を破棄して自動配置に戻す"><Icon name="refresh" size={18} />自動整列</button>
             <span className="grow" />
-            <span className="legend"><i className="lg suborchestrator" />サブオーケストレーター <i className="lg agent" />エージェント <i className="lg subagent" />サブエージェント <i className="lg tool" />ツール <i className="lg dir" />ディレクトリ</span>
+            <span className="legend"><i className="lg suborchestrator" />サブオーケストレーター <i className="lg agent" />エージェント <i className="lg subagent" />サブエージェント <i className="lg tool" />ツール <i className="lg dir" />ディレクトリ <i className="lg llm" />ローカル LLM</span>
           </div>
           <AdminGraph entities={entities} tools={tools} fitKey={fitKey} selected={sel} onSelect={setSel} onMove={onMove} onConnect={onConnect} onContext={onContext} />
           <p className="hint tips">操作: ノードをドラッグで移動 / 背景をドラッグでパン / ホイールでズーム / 右の ● から別ノードの左の ● へドラッグして接続（親子の付け替え・ツール接続）。<b>定義ファイル（.claude/agents/）のあるものは、モデル・ツール接続・プロンプトの変更がそのファイルに書き込まれます（元のファイルは portal/data/backups に退避）。</b></p>

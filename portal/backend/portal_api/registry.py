@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .definitions import DefinitionError, DefinitionStore, entry_node, merge_tools
+from .definitions import DefinitionError, DefinitionStore, entry_node, merge_tools, node_entry
 from .icons import IconError, IconStore
 
 KINDS = ('orchestrator', 'suborchestrator', 'agent', 'subagent')
@@ -20,7 +20,12 @@ PARENT_KINDS = {
     'subagent': ('agent', 'suborchestrator', 'orchestrator'),
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
-TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory')
+TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory', 'llm')
+NODE_TOOL_KINDS = ('directory', 'llm')   # Agent Console がプロセス内の MCP サーバーとして公開するノード。定義ファイルのある担当にだけつなげる
+# LLM ノード（ローカル LLM。ADR 0040）の設定。モデル名は Ollama のもの
+LLM_MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$')
+LLM_MAX_PROMPT = 8000
+LLM_DEFAULTS = {'temperature': 0.7, 'max_tokens': 1024}
 # session 型の委任先に持たせられる env と args（ADR 0039）。nekogamisama/bin/delegate.sh の許可リストと同じ規則
 SESSION_ENV_KEYS = frozenset({'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
                               'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
@@ -116,6 +121,32 @@ def _clean_dir_path(path):
     if len(parts) > DIR_MAX_DEPTH or not all(DIR_SEGMENT_RE.match(p) and p not in ('.', '..') for p in parts):
         raise ValidationError(f'path は英数字と . _ - の名前を / でつないだ相対パス（先頭は英数字、{DIR_MAX_DEPTH} 階層まで。.. や絶対パスは不可）')
     return '/'.join(parts)
+
+
+def _clean_llm_fields(data, base=None):
+    """LLM ノードの model / prompt（システムプロンプト）/ temperature / max_tokens を検証する。base があれば、指定のない項目は base の値を保つ。"""
+    out = dict(base or {})
+    if 'model' in data or not base:
+        model = str(data.get('model') or '').strip()
+        if not LLM_MODEL_RE.match(model):
+            raise ValidationError('model は Ollama のモデル名（例: qwen3:8b）。英数字と . _ : / - のみ')
+        out['model'] = model
+    if 'prompt' in data or not base:
+        prompt = data.get('prompt') or ''
+        if not isinstance(prompt, str) or len(prompt) > LLM_MAX_PROMPT:
+            raise ValidationError(f'プロンプトは文字列で、{LLM_MAX_PROMPT} 文字まで')
+        out['prompt'] = prompt
+    if 'temperature' in data or not base:
+        t = data.get('temperature', LLM_DEFAULTS['temperature'])
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t <= 2:
+            raise ValidationError('temperature は 0〜2 の数')
+        out['temperature'] = float(t)
+    if 'max_tokens' in data or not base:
+        m = data.get('max_tokens', LLM_DEFAULTS['max_tokens'])
+        if isinstance(m, bool) or not isinstance(m, int) or not 16 <= m <= 4096:
+            raise ValidationError('max_tokens は 16〜4096 の整数')
+        out['max_tokens'] = m
+    return out
 
 
 def _clean_dir_perms(perms):
@@ -273,7 +304,12 @@ class Registry:
             if body['name'] != cur['name']:
                 self._rename(cur, body['name'])           # 定義ファイル・配下のフォルダ・委任先一覧の名前も合わせる
                 cur = self.get(eid)
+            self._check_node_connections(cur, body)
             definition = self._apply_definition(cur, body, allow) if cur.get('definition') else cur.get('definition')
+            try:
+                self._apply_host_nodes(cur, body, allow)
+            except DefinitionError as ex:
+                raise ValidationError(str(ex))
             e = {**cur, **body, 'definition': definition, 'updated_at': _now()}
             self._items[eid] = e
             self._save()
@@ -315,8 +351,8 @@ class Registry:
             kind = data.get('kind') or 'custom'
             if kind not in TOOL_KINDS:
                 raise ValidationError(f'kind は {TOOL_KINDS} のいずれか')
-            if kind == 'directory' and not DIR_NAME_RE.match(name):
-                raise ValidationError('ディレクトリの名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
+            if kind in NODE_TOOL_KINDS and not DIR_NAME_RE.match(name):
+                raise ValidationError('ディレクトリ・LLM の名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
             if any(t['name'] == name for t in self._tools.values()):
                 raise ValidationError(f'ツール "{name}" は既に使われている')
             tid = tid or str(uuid.uuid4())
@@ -325,6 +361,8 @@ class Registry:
             if kind == 'directory':
                 t['path'] = _clean_dir_path(data.get('path'))
                 t['perms'] = _clean_dir_perms(data.get('perms'))
+            if kind == 'llm':
+                t.update(_clean_llm_fields(data))
             self._tools[tid] = t
             self._save()
             return dict(t)
@@ -344,6 +382,10 @@ class Registry:
                     self._tools[tid]['perms'] = _clean_dir_perms(patch['perms'])
             elif 'path' in patch or 'perms' in patch:
                 raise ValidationError('path と perms を持てるのは、ディレクトリのノードだけ')
+            if self._tools[tid]['kind'] == 'llm':   # モデル・プロンプト・温度・出力上限は、LLM ノードだけ
+                self._tools[tid].update(_clean_llm_fields(patch, base=self._tools[tid]))
+            elif any(k in patch for k in ('model', 'prompt', 'temperature', 'max_tokens')):
+                raise ValidationError('model・prompt・temperature・max_tokens を持てるのは、LLM ノードだけ')
             self._save()
             return dict(self._tools[tid])
 
@@ -351,7 +393,7 @@ class Registry:
         with self._lock:
             if tid not in self._tools:
                 raise NotFound(tid)
-            if self._tools[tid]['kind'] == 'directory':
+            if self._tools[tid]['kind'] in NODE_TOOL_KINDS:
                 self._detach_directory(self._tools[tid]['name'])
             del self._tools[tid]
             for e in self._items.values():
@@ -405,6 +447,64 @@ class Registry:
             return name
         return self._items[body['parent_id']]['name']
 
+    def _node_host(self, cur):
+        """ディレクトリ・LLM のノードのツール（定義ファイルの tools）を書き込む先の担当。
+        - エージェント定義（.claude/agents/）のある担当は、自分自身。
+        - サブオーケストレーターは、委任先（suborchestrators.json で type=agent のもの）の担当。`azure-sage` と話すとき、実際に動くのは委任先の
+          `azure-architect` なので、サブオーケストレーターへの接続は、そのツールになる（ADR 0040）。
+        - 猫神さま（CLAUDE.md）や、委任先のない担当は None（つないでも実行時に効かない）。"""
+        if (cur.get('definition') or {}).get('kind') == 'agent-md':
+            return cur
+        if cur['kind'] != 'suborchestrator':
+            return None
+        try:
+            entry = self._delegate_read().get(cur['name']) or {}
+        except ValidationError:
+            return None
+        if entry.get('type') != 'agent':
+            return None
+        host = next((x for x in self._items.values() if x['name'] == entry.get('agent') and (x.get('definition') or {}).get('kind') == 'agent-md'), None)
+        return host
+
+    def _node_changes(self, cur, body):
+        """今回の変更で、新しくつなぐノードと、外すノード（ディレクトリ・LLM だけ）"""
+        added = [self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools and self._tools[i]['kind'] in NODE_TOOL_KINDS]
+        removed = [self._tools[i] for i in set(cur['tool_ids']) - set(body['tool_ids']) if i in self._tools and self._tools[i]['kind'] in NODE_TOOL_KINDS]
+        return added, removed
+
+    def _check_node_connections(self, cur, body):
+        """ディレクトリ・LLM のノードを新しくつなげるのは、ツールを書ける担当（上の `_node_host`）だけ。
+        猫神さまや定義のない担当につないでも、実行時には何も効かないので、黙って受け付けない。"""
+        added, _ = self._node_changes(cur, body)
+        if added and self._node_host(cur) is None:
+            raise ValidationError(f'{cur["name"]} は、ツールを書ける定義ファイル（.claude/agents/）も、委任先のエージェントも持たないので、ノードをつなげない: {", ".join(sorted(t["name"] for t in added))}')
+
+    def _apply_host_nodes(self, cur, body, allow_dangerous):
+        """サブオーケストレーターへの接続を、委任先の担当の定義ファイルに反映する（自分の定義には tools がないため）。"""
+        host = self._node_host(cur)
+        if host is None or host['id'] == cur['id']:
+            return
+        added, removed = self._node_changes(cur, body)
+        if not added and not removed:
+            return
+        self._check_risky(added, allow_dangerous)
+        d = dict(host['definition'])
+        try:
+            tools = [t for t in (self.defs.read(d)['tools'] or []) if entry_node(t) not in {r['name'] for r in removed}]
+            have = {entry_node(t) for t in tools}
+            tools += [node_entry(t['name'], t['kind']) for t in added if t['name'] not in have]
+            self.defs.write(d, tools=tools)
+        except DefinitionError as ex:
+            raise ValidationError(str(ex))
+        ids = [i for i in host['tool_ids'] if i not in {r['id'] for r in removed}] + [t['id'] for t in added if t['id'] not in host['tool_ids']]
+        self._items[host['id']] = {**host, 'tool_ids': ids, 'updated_at': _now()}
+
+    @staticmethod
+    def _check_risky(added, allow_dangerous):
+        risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in DIR_RISKY_PERMS))
+        if risky and not allow_dangerous:
+            raise DefinitionError(f'書き込み・削除・Python 実行ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
+
     def _apply_definition(self, cur, body, allow_dangerous):
         """エンティティの変更を定義ファイルへ反映する（台帳を保存する前に呼ぶ。失敗したら台帳も変えない）。"""
         d = dict(cur['definition'])
@@ -415,10 +515,7 @@ class Registry:
                 return d
             tools = None
             if body['tool_ids'] != cur['tool_ids']:
-                added = [self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools]
-                risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in DIR_RISKY_PERMS))
-                if risky and not allow_dangerous:
-                    raise DefinitionError(f'書き込み・削除・Python 実行ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
+                self._check_risky([self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools], allow_dangerous)
                 current = self.defs.read(d)['tools'] or []
                 tools = merge_tools(current, self._tool_names(body['tool_ids']), self._catalog())
             self.defs._check(body['description'], body['model'], tools)
@@ -642,10 +739,17 @@ class Registry:
         delegation = [{'name': n, 'registered': n in subs, 'wired': n in wired, 'type': (wired.get(n) or {}).get('type', 'session'),
                        'dir': (wired.get(n) or {}).get('dir'), 'agent': (wired.get(n) or {}).get('agent'),
                        'description': (wired.get(n) or {}).get('description', ''), 'entity_id': subs.get(n, {}).get('id'),
-                       'entity': self._entity_brief(subs.get(n)), 'target': self._target_brief((wired.get(n) or {}).get('agent'))}
+                       'entity': self._entity_brief(subs.get(n)), 'target': self._target_brief((wired.get(n) or {}).get('agent')),
+                       'local_model': self._local_model(wired.get(n))}
                       for n in sorted(set(subs) | set(wired))]
         return {'admin': neko, 'counts': count, 'tools': len(self._tools), 'delegation': delegation,
                 'misplaced': misplaced, 'missing': missing}
+
+    @staticmethod
+    def _local_model(entry):
+        """session 型で、ローカル LLM（ANTHROPIC_BASE_URL を差し替えたもの）を使う委任先の、モデル名。画面は Claude のモデルの代わりにこれを出す。"""
+        env = (entry or {}).get('env') or {}
+        return (env.get('ANTHROPIC_MODEL') or env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL') or 'ローカル LLM') if env.get('ANTHROPIC_BASE_URL') else None
 
     @staticmethod
     def _entity_brief(e):

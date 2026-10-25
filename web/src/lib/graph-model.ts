@@ -29,7 +29,7 @@ export const DIR_PERMS: { key: DirPerm; label: string }[] = [{ key: 'list', labe
 export const permLabels = (perms?: Partial<DirPerms>) => DIR_PERMS.filter((p) => perms?.[p.key]).map((p) => p.label);
 /** 書き込み・削除・Python 実行ができるディレクトリ。担当に新しく接続するときは確認が要る */
 export const isRiskyDir = (t?: Tool) => t?.kind === 'directory' && RISKY_DIR_PERMS.some((k) => t.perms?.[k]);
-const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind);
+const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind === 'llm' ? `ローカル LLM · ${t.model ?? ''}` : t.kind);
 
 const COL = 270;
 const ROW = 84;

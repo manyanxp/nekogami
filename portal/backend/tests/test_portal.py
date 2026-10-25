@@ -238,6 +238,69 @@ class RegistryTest(Base):
         self.assertNotIn('dir-docs', self._agent_text('.claude/agents/x.md'))
         self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))   # 他のノードの接続は残る
 
+    def test_llm_nodes(self):
+        self.reg.sync_builtin('http://x')
+        x = next(e for e in self.reg.list() if e['name'] == 'azure-x')   # 定義ファイル（x.md）のある担当
+        node = self.reg.create_tool({'name': 'local-qwen', 'kind': 'llm', 'model': 'qwen3:8b', 'prompt': '短く答える'})
+        self.assertEqual((node['model'], node['prompt'], node['temperature'], node['max_tokens']), ('qwen3:8b', '短く答える', 0.7, 1024))
+        for bad in ({'model': ''}, {'model': 'a b'}, {'model': 'x;y'}, {'model': 'm', 'temperature': 3}, {'model': 'm', 'temperature': True},
+                    {'model': 'm', 'max_tokens': 8}, {'model': 'm', 'max_tokens': 99999}, {'model': 'm', 'max_tokens': 1.5}, {'model': 'm', 'prompt': 'x' * 8001}, {'model': 'm', 'prompt': 5}):
+            with self.assertRaises(ValidationError, msg=str(bad)):
+                self.reg.create_tool({'name': 'bad-llm', 'kind': 'llm', **bad})
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'my.llm', 'kind': 'llm', 'model': 'm'})        # MCP のサーバー名にするので記号は不可
+        # 編集: 指定した項目だけが変わる
+        n2 = self.reg.update_tool(node['id'], {'prompt': '丁寧に', 'temperature': 0.2})
+        self.assertEqual((n2['model'], n2['prompt'], n2['temperature'], n2['max_tokens']), ('qwen3:8b', '丁寧に', 0.2, 1024))
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(node['id'], {'model': 'bad model'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(next(t['id'] for t in self.reg.list_tools() if t['name'] == 'Read'), {'prompt': 'x'})      # 他の種類は不可
+        # 接続: 確認なしで、定義ファイルに mcp__llm-<名前>__* が入る
+        self.reg.update(x['id'], {'tool_ids': x['tool_ids'] + [node['id']]})
+        self.assertIn('mcp__llm-local-qwen__*', self._agent_text('.claude/agents/x.md'))
+        # 定義ファイルのない担当（猫神さま）には、つなげない
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        with self.assertRaises(ValidationError):
+            self.reg.update(neko['id'], {'tool_ids': [node['id']]})
+        # 再取り込みでも保たれ、ノードを消すと定義ファイルからも外れる
+        self.reg.sync_builtin('http://x')
+        self.assertIn(node['id'], self.reg.get(x['id'])['tool_ids'])
+        self.reg.delete_tool(node['id'])
+        self.assertNotIn('llm-local-qwen', self._agent_text('.claude/agents/x.md'))
+
+    def test_nodes_on_suborchestrator_apply_to_its_delegate(self):
+        """サブオーケストレーターへの接続は、委任先（type=agent）の担当の定義ファイルに反映される（ADR 0040）"""
+        self.reg.sync_builtin('http://x')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        dj = self.root / 'nekogamisama' / 'suborchestrators.json'
+        dj.write_text(json.dumps({'sx': {'type': 'agent', 'agent': 'azure-x', 'description': ''}}))
+        sx = self.reg.create({'kind': 'suborchestrator', 'name': 'sx', 'parent_id': neko['id']})
+        lone = self.reg.create({'kind': 'suborchestrator', 'name': 'lone', 'parent_id': neko['id']})            # 委任先なし
+        node = self.reg.create_tool({'name': 'qwen', 'kind': 'llm', 'model': 'qwen3:8b'})
+        with self.assertRaises(ValidationError):
+            self.reg.update(lone['id'], {'tool_ids': [node['id']]})
+        self.reg.update(sx['id'], {'tool_ids': [node['id']]})
+        self.assertIn('mcp__llm-qwen__*', self._agent_text('.claude/agents/x.md'))                              # 実体（azure-x）のツールになる
+        host = next(e for e in self.reg.list() if e['name'] == 'azure-x')
+        self.assertEqual((node['id'] in host['tool_ids'], node['id'] in self.reg.get(sx['id'])['tool_ids']), (True, True))
+        # 書き込みのあるディレクトリは、ここでも確認が要る。失敗したら、定義ファイルも台帳も変わらない
+        w = self.reg.create_tool({'name': 'out', 'kind': 'directory', 'path': 'out', 'perms': {'write': True}})
+        ids = self.reg.get(sx['id'])['tool_ids'] + [w['id']]
+        with self.assertRaises(ValidationError):
+            self.reg.update(sx['id'], {'tool_ids': ids})
+        self.assertNotIn('dir-out', self._agent_text('.claude/agents/x.md'))
+        self.assertNotIn(w['id'], self.reg.get(sx['id'])['tool_ids'])
+        self.reg.update(sx['id'], {'tool_ids': ids, 'allow_dangerous': True})
+        self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))
+        # 外すと、定義ファイルからも消える。他の項目（元からのツール）は残る
+        self.reg.update(sx['id'], {'tool_ids': [w['id']]})
+        text = self._agent_text('.claude/agents/x.md')
+        self.assertNotIn('llm-qwen', text)
+        self.assertIn('mcp__dir-out__*', text)
+        self.assertIn('WebSearch', text)
+
     def test_create_claude_agents_and_tree(self):
         self.reg.sync_builtin('http://x')
         (self.root / 'nekogamisama').mkdir(exist_ok=True)
@@ -396,7 +459,8 @@ class RegistryTest(Base):
     def test_admin_overview(self):
         self.reg.sync_builtin('http://x')
         (self.root / 'nekogamisama').mkdir()
-        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text(json.dumps({'azure-sage': {'dir': '..'}, 'ghost': {'dir': 'g'}}))
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text(json.dumps({'azure-sage': {'dir': '..'}, 'ghost': {'dir': 'g'},
+                                                                              'loc': {'type': 'session', 'dir': '..', 'env': {'ANTHROPIC_BASE_URL': 'http://o:1', 'ANTHROPIC_MODEL': 'qwen3:8b'}}}))
         self.reg.create({'kind': 'suborchestrator', 'name': 'unwired', 'parent_id': self.reg.list(kind='orchestrator')[0]['id']})
         ov = self.reg.admin_overview()
         self.assertEqual(ov['admin']['name'], 'nekogamisama')
@@ -404,6 +468,7 @@ class RegistryTest(Base):
         self.assertEqual((d['azure-sage']['registered'], d['azure-sage']['wired']), (True, True))
         self.assertEqual((d['unwired']['registered'], d['unwired']['wired']), (True, False))
         self.assertEqual((d['ghost']['registered'], d['ghost']['wired']), (False, True))
+        self.assertEqual((d['loc']['local_model'], d['azure-sage']['local_model']), ('qwen3:8b', None))   # ローカル LLM の委任先は、Claude のモデルではなく、そのモデル名を出す
 
     def test_docker_runtime_validation(self):
         base = {'kind': 'orchestrator', 'name': 'd'}

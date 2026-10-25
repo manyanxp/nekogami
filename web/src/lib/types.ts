@@ -12,7 +12,9 @@ export interface Entity {
 export type DirPerm = 'list' | 'read' | 'write' | 'delete' | 'exec';
 export type DirPerms = Record<DirPerm, boolean>;
 /** kind が directory のツールは、担当が読み書きできる作業領域内のディレクトリ（path と perms を持つ。ADR 0037） */
-export interface Tool { id: string; name: string; kind: string; description?: string; pos: { x: number; y: number } | null; path?: string; perms?: Partial<DirPerms> }
+export interface Tool { id: string; name: string; kind: string; description?: string; pos: { x: number; y: number } | null; path?: string; perms?: Partial<DirPerms>;
+  /** kind が llm のツールは、ローカル LLM（Ollama）のノード。model はその名前、prompt はシステムプロンプト（ADR 0040） */
+  model?: string; prompt?: string; temperature?: number; max_tokens?: number }
 
 export interface DockerStatus { state: string; detail?: string }
 export type Role = 'admin' | 'user';
@@ -26,6 +28,8 @@ export interface DelegationRow {
   name: string; type: 'agent' | 'session'; agent?: string; dir?: string; description: string; registered: boolean; wired: boolean;
   entity: { id: string; description: string; model: string; enabled: boolean; has_definition: boolean; children: number } | null;
   target: { name: string; kind: Kind } | null;
+  /** ローカル LLM を使う委任先のモデル名（Claude のモデルではない）。ふつうの委任先は null */
+  local_model?: string | null;
 }
 export interface Overview {
   admin: Entity | null; counts: { suborchestrator: number; agent: number; subagent: number }; tools: number;

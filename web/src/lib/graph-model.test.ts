@@ -42,6 +42,18 @@ describe('graph', () => {
   });
 });
 
+describe('LLM ノード（ローカル LLM）', () => {
+  const llm: Tool = { id: 'l1', name: 'qwen', kind: 'llm', pos: null, model: 'qwen3:8b', prompt: '短く', temperature: 0.7, max_tokens: 1024 };
+  it('グラフでは Claude のモデルではなく、ローカル LLM とモデル名を出し、担当と接続できる', () => {
+    const a = E('a1', 'agent', 'ag', 'o1');
+    expect(buildGraph([E('o1', 'orchestrator', 'neko'), a], [llm]).nodes.find((n) => n.id === 'l1')!.sub).toBe('ローカル LLM · qwen3:8b');
+    expect(canConnect([a], [llm], 'a1', 'l1')).toMatchObject({ ok: true, action: 'tool' });
+  });
+  it('確認が要る（危険な）接続ではない', () => {
+    expect(isRiskyDir(llm)).toBe(false);
+  });
+});
+
 describe('ディレクトリのノード', () => {
   const dir = (perms: Tool['perms']): Tool => ({ id: 'd1', name: 'docs', kind: 'directory', pos: null, path: 'notes/docs', perms });
   it('権限の表示と、危険（書き込み・削除）の判定', () => {
