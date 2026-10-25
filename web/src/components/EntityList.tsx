@@ -5,6 +5,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useMe } from './Gate';
+import { Icon } from './Icon';
 import { useToast } from './Toast';
 import { Avatar, IconPicker } from './IconPicker';
 
@@ -45,12 +46,12 @@ export function EntityList({ items, statuses, filter, onFilter, reload, openCons
                     <td>{r.model || '—'}</td>
                     <td className={`st ${st}`}>{st ? { running: '● 稼働中', stopped: '停止', not_created: '未作成', unknown: '不明' }[st] || st : r.enabled ? '有効' : '無効'}</td>
                     <td>{admin && <div className="acts">
-                      <button onClick={() => openConsole(r)} title="Agent Console を開く">Console</button>
+                      <button onClick={() => openConsole(r)} title="Agent Console を開く"><Icon name="code_run" size={18} />Console</button>
                       {r.runtime.type === 'docker' && (st === 'running'
-                        ? <button onClick={() => run('停止しました', () => api.stop(r.id))}>停止</button>
-                        : <button onClick={() => run('起動しました', () => api.start(r.id))}>起動</button>)}
-                      <EntityDialog item={r} items={items} onSaved={reload}><button>編集</button></EntityDialog>
-                      <button className="danger" onClick={() => remove(r)}>削除</button>
+                        ? <button onClick={() => run('停止しました', () => api.stop(r.id))}><Icon name="stop" size={18} />停止</button>
+                        : <button onClick={() => run('起動しました', () => api.start(r.id))}><Icon name="run" size={18} />起動</button>)}
+                      <EntityDialog item={r} items={items} onSaved={reload}><button><Icon name="edit" size={18} />編集</button></EntityDialog>
+                      <button className="danger" onClick={() => remove(r)}><Icon name="delete" size={18} />削除</button>
                     </div>}</td>
                   </tr>
                 );

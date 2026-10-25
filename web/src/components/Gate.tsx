@@ -2,6 +2,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { createContext, useContext, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { Icon } from './Icon';
 import type { Me, Role } from '@/lib/types';
 
 const MeContext = createContext<Me['user']>(null);
@@ -40,9 +41,9 @@ export function UserMenu() {
   };
   return (
     <>
-      <span className="pill" title={me.role === 'admin' ? '管理者' : '利用者'}>👤 {me.username}{me.role === 'admin' ? '（管理者）' : ''}</span>
+      <span className="pill" title={me.role === 'admin' ? '管理者' : '利用者'}><Icon name="user" size={18} />{me.username}{me.role === 'admin' ? '（管理者）' : ''}</span>
       <Dialog.Root open={open} onOpenChange={(o) => { setOpen(o); setMsg(''); }}>
-        <Dialog.Trigger asChild><button title="パスワードを変更">🔑</button></Dialog.Trigger>
+        <Dialog.Trigger asChild><button title="パスワードを変更" aria-label="パスワードを変更"><Icon name="auth_key" /></button></Dialog.Trigger>
         <Dialog.Portal>
           <Dialog.Overlay className="dlg-overlay" />
           <Dialog.Content className="dlg" aria-describedby={undefined}>
@@ -54,7 +55,7 @@ export function UserMenu() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-      <button onClick={logout}>ログアウト</button>
+      <button onClick={logout}><Icon name="logout" size={18} />ログアウト</button>
     </>
   );
 }

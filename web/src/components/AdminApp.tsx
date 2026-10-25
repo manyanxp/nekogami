@@ -7,6 +7,7 @@ import { loadTheme } from '@/lib/theme';
 import type { DelegationRow, Entity, Kind, Overview, Tool } from '@/lib/types';
 import { UsersCard } from './AdminUsers';
 import { UserMenu } from './Gate';
+import { Icon } from './Icon';
 import { DelegationCard, GodCard, Inspector, PersonalityCard, ThemeCard } from './AdminCards';
 import { AddDialog, DelegationDialog, type AddSpec } from './AdminDialogs';
 import { AdminGraph, type CtxTarget, type Sel } from './AdminGraph';
@@ -147,7 +148,7 @@ function Admin() {
   return (
     <div className="admin">
       <header>
-        <a className="navlink" href="/" title="ポータルの一覧へ">← ポータル</a>
+        <a className="navlink" href="/" title="ポータルの一覧へ"><Icon name="back" />ポータル</a>
         <div className="brand">🐾 猫神さま管理</div><span className="grow" />
         <span className={`pill ${ok ? 'ok' : 'ng'}`}>{ok === null ? '' : ok ? 'API 接続中' : 'API に接続できません'}</span>
         <UserMenu />
@@ -163,12 +164,12 @@ function Admin() {
         </aside>
         <section className="stage">
           <div className="toolbar">
-            {(['suborchestrator', 'agent', 'subagent'] as const).map((k) => <button key={k} onClick={() => setAdding({ kind: k })}>＋ {KIND_LABEL[k]}</button>)}
-            <button onClick={() => setAdding({ kind: 'tool' })}>＋ ツール</button>
+            {(['suborchestrator', 'agent', 'subagent'] as const).map((k) => <button key={k} onClick={() => setAdding({ kind: k })}><Icon name="add" size={18} />{KIND_LABEL[k]}</button>)}
+            <button onClick={() => setAdding({ kind: 'tool' })}><Icon name="tool" size={18} />ツール</button>
             <span className="sep" />
-            <button className="danger" disabled={!selDeletable} onClick={() => void deleteSelected()}>選択を削除 (Del)</button>
-            <button onClick={() => setFitKey((k) => k + 1)}>全体表示</button>
-            <button onClick={resetLayout} title="手動配置を破棄して自動配置に戻す">自動整列</button>
+            <button className="danger" disabled={!selDeletable} onClick={() => void deleteSelected()}><Icon name="delete" size={18} />選択を削除 (Del)</button>
+            <button onClick={() => setFitKey((k) => k + 1)}><Icon name="expand" size={18} />全体表示</button>
+            <button onClick={resetLayout} title="手動配置を破棄して自動配置に戻す"><Icon name="refresh" size={18} />自動整列</button>
             <span className="grow" />
             <span className="legend"><i className="lg suborchestrator" />サブオーケストレーター <i className="lg agent" />エージェント <i className="lg subagent" />サブエージェント <i className="lg tool" />ツール</span>
           </div>

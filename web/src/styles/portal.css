@@ -312,3 +312,7 @@ dialog textarea { display: block; width: 100%; margin-top: 3px; color: var(--tex
 @keyframes term-blink { to { visibility: hidden; } }
 @keyframes term-in { from { opacity: 0; transform: scale(.96) translateY(6px); } }
 @media (prefers-reduced-motion: reduce) { .term { animation: none; } .term-body .cur { animation: none; } }
+
+/* UI アイコン（Icon.tsx）。文字の隣に置く */
+.ico { vertical-align: -4px; margin-right: 4px; flex: none; }
+button .ico:only-child, .iconbtn .ico { margin-right: 0; }

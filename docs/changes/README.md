@@ -40,3 +40,5 @@
 | 2026-10-24 | [ターミナル窓の位置・待ち時間と、並列実行の指示](20261024-27-terminal-position-and-parallel.md) | [0033](../adr/0033-terminal-windows.md) |
 | 2026-10-24 | [チャットの「作業中…」が消えないときの自己修復](20261024-28-chat-busy-reconcile.md) | [0015](../adr/0015-portal-chat-with-nekogamisama.md) |
 | 2026-10-24 | [コンテナで Azure MCP が起動しない問題の修正](20261024-29-mcp-azure-icu.md) | [0005](../adr/0005-deployment-docker.md) |
+| 2026-10-25 | [画面と API の別コンテナ化 / ログインとロール / 画像素材の扱い](20261025-35-login-and-roles.md) | [0034](../adr/0034-frontend-backend-containers.md)・[0035](../adr/0035-login-and-roles.md)・[0010](../adr/0010-project-license.md) |
+| 2026-10-25 | [トレースのパネルを廃止、UI アイコン（rev1 の第 1 段階）](20261025-37-trace-to-terminal-and-ui-icons.md) | [0036](../adr/0036-trace-to-terminal-and-ui-icons.md) |

@@ -13,6 +13,7 @@ Azure Sage が使用・同梱・参照しているものとそのライセンス
 | 太陽の猫神さまの走る GIF（原画 `icons/sun-cat-loading/sun-cat-running-256.gif`。`web/public/sun-cat-running.gif` にコピー。ポータルのチャットの考え中） | ChatGPT（OpenAI）で生成・加工（`icons/sun-cat-loading/README.txt`）。**MIT の対象外・このアプリ専用**（NOTICE.md）。商用利用は OpenAI の規約が出力の権利を利用者に渡す旨を、二次情報で確認。**原文（Terms of Use「Content」）と参照画像の出どころは未確認** | **要確認** |
 | 走る猫の GIF（`web/public/neko-run.gif`。Agent Console のチャットの考え中。`scripts/gen-neko-gif.py` が標準ライブラリだけで生成） | 本プロジェクトで作成（本体に準ずる） | — |
 | 猫神さまのアイコン（原画 `icons/cat-goddess-icons/sun_cat_goddess.png`。縮小版 `web/public/neko-goddess.png` を `scripts/make-avatar.py` で生成） | ChatGPT（OpenAI）で生成（`icons/cat-goddess-icons/README.txt`）。**MIT の対象外・このアプリ専用**（NOTICE.md）。規約の確認状況は上の GIF と同じ | **要確認** |
+| 画面のボタン用アイコン（`icons/Cat_Symbols_Reference_24px/`。`web/public/ui-icons/` に 27 個をコピー） | 本プロジェクトで作成・生成（元画像は作者が用意したもの。作者の申告による）。**MIT の対象外・このアプリ専用**（NOTICE.md）。生成に使ったツールの規約は未確認 | **要確認** |
 | ポータルのアイコン選択用の縮小版（`portal/assets/icons/`、miko / sun / munakata の 3 種。原画 `icons/cat-goddess-icons/`、`scripts/make-avatar.py` で生成） | 上と同じ（ChatGPT で生成。**MIT の対象外・このアプリ専用**） | **要確認** |
 | `resource/`（README のスクリーンショット）、`docs-screenshot.png` | 本プロジェクトの画面キャプチャ。上の画像素材が写っているので、**MIT の対象外・このアプリ専用**（NOTICE.md） | — |
 
