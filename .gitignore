@@ -5,6 +5,9 @@ portal/data/
 reports/
 research/
 
+# 要件の元資料（個人のメモ・参考画像。出どころ不明の画像を含むのでコミットしない）
+docs/add_requirement/
+
 # Python / Node
 __pycache__/
 *.pyc
