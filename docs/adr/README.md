@@ -50,6 +50,7 @@ Azure Sage の設計判断と仕様の記録です。1 ファイル 1 判断、�
 | [0044](0044-admin-ui-and-subagent-persona.md) | 管理ページの見直しと、サブオーケストレーターの性格 | Accepted |
 | [0045](0045-python-node-body-only.md) | Python ノードは処理だけを書く（引数は入力ノードから、関数は自動生成） | Accepted |
 | [0046](0046-subagent-personality-file.md) | サブオーケストレーターごとの personality.md（ファイルを正にして、定義へ自動同期） | Accepted |
+| [0047](0047-shared-principles.md) | Shared Principles（サブオーケストレーターから直下の子へ渡す共通プロンプト） | Accepted |
 
 ## 運用ルール
 
