@@ -10,7 +10,7 @@ Azure Sage が使用・同梱・参照しているものとそのライセンス
 |---|---|---|
 | Azure Sage 本体（`CLAUDE.md`、`.claude/agents/`、`dashboard/`、`portal/`、`web/`、`docs/` ほか） | **MIT**（ルートの [LICENSE](../../LICENSE)、ADR 0010）。有料・独自条件の依存は [NOTICE.md](../../NOTICE.md) | 確認済み |
 | 猫アイコン（`web/src/components/ConsoleApp.tsx` 内の SVG） | 本プロジェクトで作成（本体に準ずる） | — |
-| 太陽の猫神さまの走る GIF（原画 `icons/sun-cat-loading/sun-cat-running-256.gif`。`web/public/sun-cat-running.gif` にコピー。ポータルのチャットの考え中） | ChatGPT（OpenAI）で生成・加工（`icons/sun-cat-loading/README.txt`）。**MIT の対象外・このアプリ専用**（NOTICE.md）。商用利用は OpenAI の規約が出力の権利を利用者に渡す旨を、二次情報で確認。**原文（Terms of Use「Content」）と参照画像の出どころは未確認** | **要確認** |
+| 太陽の猫神さまの走る GIF（原画 `icons/sun-cat-loading/sun-cat-running-256.gif`。`web/public/sun-cat-running.gif` にコピー。ポータルのチャットの考え中） | ChatGPT（OpenAI）で生成・加工（`icons/sun-cat-loading/README.txt`）。**MIT の対象外・このアプリ専用**（NOTICE.md）。OpenAI の Terms of Use「Content」は、入力の権利は利用者に残り、出力は利用者が所有し、OpenAI は出力への権利を（あれば）利用者に譲渡する、と述べる（2026-10-25、検索結果が引用した本文で確認。**サイトが読み取りを拒み（HTTP 403）、原文は直接読めていない**）。出力は一意でなく、他の利用者に似た出力が出うる。**参照画像の出どころは未確認** | **要確認** |
 | 走る猫の GIF（`web/public/neko-run.gif`。Agent Console のチャットの考え中。`scripts/gen-neko-gif.py` が標準ライブラリだけで生成） | 本プロジェクトで作成（本体に準ずる） | — |
 | 猫神さまのアイコン（原画 `icons/cat-goddess-icons/sun_cat_goddess.png`。縮小版 `web/public/neko-goddess.png` を `scripts/make-avatar.py` で生成） | ChatGPT（OpenAI）で生成（`icons/cat-goddess-icons/README.txt`）。**MIT の対象外・このアプリ専用**（NOTICE.md）。規約の確認状況は上の GIF と同じ | **要確認** |
 | 画面のボタン用アイコン（`icons/Cat_Symbols_Reference_24px/`。`web/public/ui-icons/` に 27 個をコピー） | 本プロジェクトで作成・生成（元画像は作者が用意したもの。作者の申告による）。**MIT の対象外・このアプリ専用**（NOTICE.md）。生成に使ったツールの規約は未確認 | **要確認** |
@@ -74,12 +74,16 @@ Python 本体は PSF License（同梱せず、利用者の環境のものを使�
 
 ## 2e. ローカル LLM（ADR 0039。任意）
 
+2026-10-25 に、一次情報で再確認した。
+
 | 対象 | ライセンス | 状態 |
 |---|---|---|
-| Ollama（`ollama/ollama` イメージ。`--profile local-llm` のときだけ使う） | MIT（Ollama のリポジトリ）。イメージには NVIDIA の CUDA ライブラリが含まれ、NVIDIA の配布条件に従う（このリポジトリは配布しない） | **要確認**（イメージの同梱物の条件を、配布する場合に確認） |
-| Qwen3-8B（`qwen3:8b`。モデルの重み） | Apache-2.0（Qwen の公開条件）。Ollama のモデルページの表示も確認すること | **要確認**（一次情報の LICENSE を、利用前に確認） |
+| Ollama（ソフトウェア。`ollama/ollama` イメージ 0.40.3） | **MIT**（`github.com/ollama/ollama` の `LICENSE`。冒頭 `MIT License` / `Copyright (c) Ollama`） | 確認済み |
+| Ollama イメージの同梱物 | `/usr/lib/ollama/` に、llama.cpp・fmt・nlohmann/json・cpp-httplib・xgrammar・MLX・CUTLASS・cuDNN frontend・NVTX などのライセンス表示が同梱されている（いずれも MIT / Apache-2.0 / BSD 系の表示）。cuBLAS・cuDNN の実行ライブラリは NVIDIA の配布条件に従う。ベースは Ubuntu 24.04 | 確認済み（表示の存在）。NVIDIA ライブラリの条件の**原文は未読**（イメージを配布する場合に要確認） |
+| Qwen3-8B（`qwen3:8b`。モデルの重み） | **Apache-2.0**（Hugging Face の `Qwen/Qwen3-8B` のメタデータ `license: apache-2.0`、および Ollama のモデルページの表示。商用利用の制限の記載なし） | 確認済み（ページの表示）。LICENSE 全文は読んでいない |
 
-モデルの重みは、このリポジトリに含めない（利用者が `ollama pull` で取得する）。他のモデルに替えるときは、そのモデルのライセンス（商用利用の可否）を、先に確認すること。
+- このリポジトリは、モデルの重みもイメージも配布しない（利用者が `ollama pull` / `docker compose` で取得する）。
+- 他のモデルに替えるときは、そのモデルのライセンス（商用利用の可否、利用者数の制限など）を先に確認すること。Apache-2.0 でないモデルもある。
 
 ## 3. 実行環境・外部ツール
 
