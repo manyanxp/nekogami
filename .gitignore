@@ -11,6 +11,9 @@ docs/add_requirement/
 # 担当が読み書きする作業領域（ディレクトリのノードの置き場。中身は利用者のデータなのでコミットしない）
 workspace/*
 !workspace/.gitkeep
+# Python 実行のジョブ置き場（一時ファイル）
+sandbox/jobs/*
+!sandbox/jobs/.gitkeep
 
 # Python / Node
 __pycache__/

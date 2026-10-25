@@ -194,12 +194,12 @@ class RegistryTest(Base):
         self.reg.sync_builtin('http://x')
         x = next(e for e in self.reg.list() if e['name'] == 'azure-x')
         d = self.reg.create_tool({'name': 'docs', 'kind': 'directory', 'path': 'notes/docs/'})
-        self.assertEqual((d['path'], d['perms']), ('notes/docs', {'list': False, 'read': False, 'write': False, 'delete': False}))
+        self.assertEqual((d['path'], d['perms']), ('notes/docs', {'list': False, 'read': False, 'write': False, 'delete': False, 'exec': False}))
         for bad in ('', '..', '../x', '/etc', 'a/../b', '.hidden', 'a//b', 'a b', 'x' * 65, '/'.join(['a'] * 9), None, 5):
             with self.assertRaises(ValidationError, msg=repr(bad)):
                 self.reg.create_tool({'name': 'bad', 'kind': 'directory', 'path': bad})
         with self.assertRaises(ValidationError):
-            self.reg.create_tool({'name': 'bad2', 'kind': 'directory', 'path': 'a', 'perms': {'exec': True}})
+            self.reg.create_tool({'name': 'bad2', 'kind': 'directory', 'path': 'a', 'perms': {'sudo': True}})
         for bad_name in ('my.docs', 'my_docs', 'a__b'):   # MCP のサーバー名にする。記号は不可
             with self.assertRaises(ValidationError, msg=bad_name):
                 self.reg.create_tool({'name': bad_name, 'kind': 'directory', 'path': 'a'})
@@ -218,12 +218,23 @@ class RegistryTest(Base):
         self.assertNotIn('dir-out', self._agent_text('.claude/agents/x.md'))
         self.reg.update(x['id'], {'tool_ids': ids, 'allow_dangerous': True})
         self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))
+        # Python 実行（exec）も、書き込み・削除と同じく確認が要る
+        e = self.reg.create_tool({'name': 'calc', 'kind': 'directory', 'path': 'calc', 'perms': {'read': True, 'exec': True}})
+        with self.assertRaises(ValidationError):
+            self.reg.update(x['id'], {'tool_ids': ids + [e['id']]})
+        self.reg.delete_tool(e['id'])
         # 台帳に戻しても、ディレクトリのノードとの対応が保たれる（再取り込み）
         self.reg.sync_builtin('http://x')
         self.assertEqual(set(self.reg.get(x['id'])['tool_ids']) >= {d['id'], w['id']}, True)
         # ノードを消すと、担当との接続も外れる
         self.reg.delete_tool(d['id'])
         self.assertNotIn(d['id'], self.reg.get(x['id'])['tool_ids'])
+        self.assertNotIn('dir-docs', self._agent_text('.claude/agents/x.md'))   # 定義ファイルからも外れる
+        # 同じ名前で作り直しても、確認なしでつながったりしない
+        again = self.reg.create_tool({'name': 'docs', 'kind': 'directory', 'path': 'other', 'perms': {'write': True}})
+        self.assertNotIn(again['id'], self.reg.get(x['id'])['tool_ids'])
+        self.assertNotIn('dir-docs', self._agent_text('.claude/agents/x.md'))
+        self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))   # 他のノードの接続は残る
 
     def test_create_claude_agents_and_tree(self):
         self.reg.sync_builtin('http://x')

@@ -21,7 +21,8 @@ PARENT_KINDS = {
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
 TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory')
-DIR_PERMS = ('list', 'read', 'write', 'delete')   # 参照（一覧）・読み込み・書き込み・削除
+DIR_PERMS = ('list', 'read', 'write', 'delete', 'exec')   # 参照（一覧）・読み込み・書き込み・削除・Python の実行（ADR 0038）
+DIR_RISKY_PERMS = ('write', 'delete', 'exec')   # 担当に新しく足すとき、確認が要る権限
 DIR_SEGMENT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 DIR_MAX_DEPTH = 8
 DIR_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]{0,39}$')   # MCP のサーバー名（dir-<名前>）になる。記号は置き換えられうるので、英数字とハイフンだけ
@@ -317,12 +318,28 @@ class Registry:
         with self._lock:
             if tid not in self._tools:
                 raise NotFound(tid)
+            if self._tools[tid]['kind'] == 'directory':
+                self._detach_directory(self._tools[tid]['name'])
             del self._tools[tid]
             for e in self._items.values():
                 if tid in e['tool_ids']:
                     e['tool_ids'] = [i for i in e['tool_ids'] if i != tid]
                     e['updated_at'] = _now()
             self._save()
+
+    def _detach_directory(self, name):
+        """消すディレクトリのノードの項目（mcp__dir-<名前>__*）を、担当の定義ファイルから外す。
+        残すと、同じ名前でノードを作り直したときに、確認なしで担当につながってしまう（ADR 0037）。"""
+        for e in self._items.values():
+            d = e.get('definition')
+            if not d or d['kind'] == 'claude-md':
+                continue
+            try:
+                tools = self.defs.read(d)['tools']
+                if tools and any(entry_node(t) == name for t in tools):
+                    self.defs.write(d, tools=[t for t in tools if entry_node(t) != name])
+            except DefinitionError as ex:
+                raise ValidationError(f'{e["name"]} の定義ファイルから接続を外せなかった: {ex}')
 
     def _seed_tools(self):
         """組み込みツールと .mcp.json の MCP サーバーをツールとして登録する（UUID v5。冪等）。"""
@@ -366,9 +383,9 @@ class Registry:
             tools = None
             if body['tool_ids'] != cur['tool_ids']:
                 added = [self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools]
-                risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in ('write', 'delete')))
+                risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in DIR_RISKY_PERMS))
                 if risky and not allow_dangerous:
-                    raise DefinitionError(f'書き込み・削除ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
+                    raise DefinitionError(f'書き込み・削除・Python 実行ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
                 current = self.defs.read(d)['tools'] or []
                 tools = merge_tools(current, self._tool_names(body['tool_ids']), self._catalog())
             self.defs._check(body['description'], body['model'], tools)

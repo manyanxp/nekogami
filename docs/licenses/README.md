@@ -56,6 +56,22 @@ Azure Sage が使用・同梱・参照しているものとそのライセンス
 
 Python 本体は PSF License（同梱せず、利用者の環境のものを使う）。
 
+## 2d. Python の実行役（`sandbox/`）
+
+`sandbox/Dockerfile` が `pip install` するもの（ADR 0038）。利用者が自分の環境でイメージを作る（このリポジトリはイメージを配布しない）。バージョンは 2026-10-25 に作ったイメージのもの。
+
+| パッケージ | バージョン | ライセンス | 状態 |
+|---|---|---|---|
+| `numpy` | 2.5.4 | BSD-3-Clause（同梱部品に 0BSD・MIT・Zlib・CC0） | 確認済み（パッケージのメタデータ） |
+| `pandas` | 2.3.3 | BSD-3-Clause | 確認済み |
+| `scipy` | 1.18.1 | BSD-3-Clause | 確認済み |
+| `matplotlib` | 3.11.2 | matplotlib License（PSF ベースの寛容な条件） | 確認済み |
+| `scikit-learn` | 1.9.1 | BSD-3-Clause | 確認済み |
+| `openpyxl` | 3.1.5 | MIT | 確認済み |
+| 推移的依存（`contourpy`・`cycler`・`kiwisolver`・`joblib`・`threadpoolctl`・`cloudpickle`・`narwhals`: BSD / MIT、`pillow`: MIT-CMU、`fonttools`・`pyparsing`・`six`・`et_xmlfile`: MIT、`python-dateutil`: BSD / Apache-2.0、`tzdata`: Apache-2.0、`pytz`: MIT、`packaging`: Apache-2.0 / BSD-2-Clause） | — | いずれも寛容 | 確認済み |
+
+コピーレフト（GPL / LGPL 系）の Python パッケージは含まない。ベースイメージ `python:3.12-slim`（Debian）には、GPL / LGPL のシステムパッケージが含まれる（ここで作ったイメージを**配布**するときは、Debian と Python のライセンス表示に従う）。
+
 ## 3. 実行環境・外部ツール
 
 | 対象 | ライセンス / 条件 | 用途 | 状態 |

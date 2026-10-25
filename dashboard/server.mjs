@@ -16,6 +16,7 @@ import { routeOf } from './route.mjs';
 import { readTheme } from './theme.mjs';
 import { z } from 'zod';
 import { DIR_PREFIX, buildDirServers, checkDirAccess, loadDirNodes } from './fs-tools.mjs';
+import { runPython } from './py-exec.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(HERE, '..');
@@ -25,6 +26,8 @@ const THEME_FILE = process.env.THEME_FILE || path.join(PROJECT_DIR, 'portal', 'd
 const HOST = process.env.TRACE_HOST || '127.0.0.1';
 // ディレクトリのノード（ADR 0037）が指す作業領域。ノードの path は、ここからの相対パス
 const FS_ROOT = path.resolve(process.env.FS_ROOT || path.join(PROJECT_DIR, 'workspace'));
+// Python の実行（ADR 0038）のジョブ置き場。実行役（py-sandbox）と共有する
+const JOBS_DIR = path.resolve(process.env.SANDBOX_JOBS || path.join(PROJECT_DIR, 'sandbox', 'jobs'));
 const CHAT_MODEL = process.env.CHAT_MODEL || undefined; // 未指定なら .claude/settings.json の model
 const ALLOW_AZURE_MCP = process.env.ALLOW_AZURE_MCP !== '0';
 // 既定の相手を決める従来の環境変数（PROJECT_DIR からの相対）。'.' = Azure Sage、'nekogamisama' = 猫神さま。CHAT_TARGET=<名前> でも指定できる
@@ -240,7 +243,7 @@ async function runChat(text, target, user) {
         model: CHAT_MODEL,
         includePartialMessages: true,
         abortController: ac,
-        mcpServers: buildDirServers({ sdk, z, nodes: loadDirNodes(REGISTRY_FILE), root: FS_ROOT }),   // 権限のある操作だけ公開する
+        mcpServers: buildDirServers({ sdk, z, nodes: loadDirNodes(REGISTRY_FILE), root: FS_ROOT, run: (box, code) => runPython({ box, code, jobsDir: JOBS_DIR }) }),   // 権限のある操作だけ公開する
         canUseTool: (n, i, o) => canUseTool(n, i, target, user, o),
       },
     });

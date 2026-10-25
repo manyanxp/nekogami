@@ -23,11 +23,12 @@ export function modelOptions(current = ''): [string, string][] {
 /** 書き込み・実行ができるツール。新しく接続するときは確認する（バックエンドも確認なしでは拒否する） */
 export const DANGEROUS_TOOLS = ['Bash', 'Write', 'Edit', 'NotebookEdit'];
 
-/** ディレクトリのノードの権限（表示順）。参照 = 一覧、読み込み、書き込み、削除 */
-export const DIR_PERMS: { key: DirPerm; label: string }[] = [{ key: 'list', label: '参照' }, { key: 'read', label: '読み込み' }, { key: 'write', label: '書き込み' }, { key: 'delete', label: '削除' }];
+/** ディレクトリのノードの権限（表示順）。参照 = 一覧、読み込み、書き込み、削除、Python 実行 */
+export const RISKY_DIR_PERMS: DirPerm[] = ['write', 'delete', 'exec'];
+export const DIR_PERMS: { key: DirPerm; label: string }[] = [{ key: 'list', label: '参照' }, { key: 'read', label: '読み込み' }, { key: 'write', label: '書き込み' }, { key: 'delete', label: '削除' }, { key: 'exec', label: 'Python 実行' }];
 export const permLabels = (perms?: Partial<DirPerms>) => DIR_PERMS.filter((p) => perms?.[p.key]).map((p) => p.label);
-/** 書き込み・削除ができるディレクトリ。担当に新しく接続するときは確認が要る */
-export const isRiskyDir = (t?: Tool) => t?.kind === 'directory' && !!(t.perms?.write || t.perms?.delete);
+/** 書き込み・削除・Python 実行ができるディレクトリ。担当に新しく接続するときは確認が要る */
+export const isRiskyDir = (t?: Tool) => t?.kind === 'directory' && RISKY_DIR_PERMS.some((k) => t.perms?.[k]);
 const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind);
 
 const COL = 270;

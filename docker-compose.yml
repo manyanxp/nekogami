@@ -1,4 +1,5 @@
 # 3 コンテナ構成（ADR 0034）: web（画面）→ api（ポータルの API）/ neko-brain（Agent Console。猫神さまの脳）
+# + py-sandbox（Python の実行役。ADR 0038。ネットワークなし）
 # ブラウザが開くのは web だけ。api と neko-brain はコンテナ間のネットワークにだけ出す
 services:
   web:
@@ -63,6 +64,25 @@ services:
       - ./nekogamisama:/app/nekogamisama
       # ディレクトリのノード（ADR 0037）が指す作業領域。担当が読み書き・削除できるのは、この中だけ
       - ./workspace:/app/workspace
+      # Python の実行（ADR 0038）。ジョブを置いて、py-sandbox が実行する
+      - ./sandbox/jobs:/app/sandbox/jobs
+    restart: unless-stopped
+
+  # Python の実行役（ADR 0038）。ネットワークなし・読み取り専用・非 root・メモリ/プロセス上限つき。
+  # 見えるのはジョブ置き場だけ（ディレクトリのノードの中身は、neko-brain が作業用にコピーして渡す）
+  py-sandbox:
+    build: ./sandbox
+    network_mode: none
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes:
+      - ./sandbox/jobs:/jobs
     restart: unless-stopped
 
 volumes:

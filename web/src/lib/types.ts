@@ -9,7 +9,7 @@ export interface Entity {
   enabled: boolean; tags: string[]; runtime: Runtime; tool_ids: string[]; pos: { x: number; y: number } | null;
   protected?: boolean; definition?: Definition | null; icon?: string | null;
 }
-export type DirPerm = 'list' | 'read' | 'write' | 'delete';
+export type DirPerm = 'list' | 'read' | 'write' | 'delete' | 'exec';
 export type DirPerms = Record<DirPerm, boolean>;
 /** kind が directory のツールは、担当が読み書きできる作業領域内のディレクトリ（path と perms を持つ。ADR 0037） */
 export interface Tool { id: string; name: string; kind: string; description?: string; pos: { x: number; y: number } | null; path?: string; perms?: Partial<DirPerms> }

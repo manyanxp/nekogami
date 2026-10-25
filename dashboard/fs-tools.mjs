@@ -1,9 +1,12 @@
-// ディレクトリのノード（ADR 0037）: 場所の解決（作業領域の外へ出さない）と、参照・読み込み・書き込み・削除。
+// ディレクトリのノード（ADR 0037）: 場所の解決（作業領域の外へ出さない）と、参照・読み込み・書き込み・削除・Python の実行。
 // 担当に渡すのは、権限がオンの操作だけ。どの担当が使えるかは、担当の定義ファイルの tools（`mcp__dir-<名前>__*`）で決まる。
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const OPS = ['list', 'read', 'write', 'delete'];
+// 担当に出すツール名 → 台帳の権限のキー。run（Python の実行）の権限は exec（ADR 0038）
+export const PERM_OF = { list: 'list', read: 'read', write: 'write', delete: 'delete', run: 'exec' };
+export const OPS = Object.keys(PERM_OF);
+const PERM_KEYS = Object.values(PERM_OF);
 export const DIR_PREFIX = 'dir-';
 export const MAX_READ = 200 * 1024;
 export const MAX_WRITE = 1024 * 1024;
@@ -19,7 +22,7 @@ export function loadDirNodes(registryFile) {
     const tools = JSON.parse(fs.readFileSync(registryFile, 'utf8')).tools || [];
     return tools
       .filter((t) => t.kind === 'directory' && NODE_NAME.test(t.name || '') && validRel(t.path))
-      .map((t) => ({ name: t.name, path: t.path, description: String(t.description || ''), perms: Object.fromEntries(OPS.map((o) => [o, t.perms?.[o] === true])) }));
+      .map((t) => ({ name: t.name, path: t.path, description: String(t.description || ''), perms: Object.fromEntries(PERM_KEYS.map((k) => [k, t.perms?.[k] === true])) }));
   } catch { return []; }
 }
 
@@ -57,7 +60,7 @@ export class DirBox {
   }
 
   need(op) {
-    if (!this.node.perms[op]) throw new Error(`このディレクトリには「${LABEL[op]}」の権限がない`);
+    if (!this.node.perms[PERM_OF[op]]) throw new Error(`このディレクトリには「${LABEL[op]}」の権限がない`);
   }
 
   list(rel) {
@@ -84,15 +87,20 @@ export class DirBox {
   }
 
   write(rel, content) {
+    if (typeof content !== 'string' || Buffer.byteLength(content) > MAX_WRITE) throw new Error(`content は文字列で、${MAX_WRITE} バイトまで`);
+    this.writeBytes(rel, Buffer.from(content, 'utf8'));
+    return `${rel} に ${Buffer.byteLength(content)} バイトを書いた`;
+  }
+
+  /** バイト列を書く（Python の実行結果の画像など）。上限の検査は呼ぶ側 */
+  writeBytes(rel, bytes) {
     this.need('write');
     const { abs, empty } = this.resolve(rel);
     if (empty) throw new Error('path が必要（ファイル）');
-    if (typeof content !== 'string' || Buffer.byteLength(content) > MAX_WRITE) throw new Error(`content は文字列で、${MAX_WRITE} バイトまで`);
     if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) throw new Error('ディレクトリには書けない');
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     this.resolve(path.relative(this.realBase(), abs).split(path.sep).join('/'));   // 親を作ったあとにもう一度、外へ出ていないか確かめる
-    fs.writeFileSync(abs, content, 'utf8');
-    return `${rel} に ${Buffer.byteLength(content)} バイトを書いた`;
+    fs.writeFileSync(abs, bytes);
   }
 
   delete(rel) {
@@ -108,7 +116,7 @@ export class DirBox {
   }
 }
 
-const LABEL = { list: '参照', read: '読み込み', write: '書き込み', delete: '削除' };
+const LABEL = { list: '参照', read: '読み込み', write: '書き込み', delete: '削除', run: 'Python 実行' };
 const isLink = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
 
 /** MCP のツール名 `mcp__dir-<名前>__<操作>` の判定。呼んだ担当が接続していて、ノードに権限があるときだけ許可する。
@@ -119,14 +127,14 @@ export function checkDirAccess({ toolName, nodes, callerName, callerTools }) {
   const name = server.slice(DIR_PREFIX.length);
   const node = nodes.find((n) => n.name === name);
   if (!node) return { ok: false, reason: `ディレクトリ ${name} は台帳にない` };
-  if (!node.perms[op]) return { ok: false, reason: `ディレクトリ ${name} には「${LABEL[op]}」の権限がない` };
+  if (!node.perms[PERM_OF[op]]) return { ok: false, reason: `ディレクトリ ${name} には「${LABEL[op]}」の権限がない` };
   if (!callerName) return { ok: false, reason: '呼んだ担当を特定できないので許可しない' };
   if (!callerTools?.includes(`mcp__${server}__*`) && !callerTools?.includes(toolName)) return { ok: false, reason: `${callerName} はディレクトリ ${name} に接続されていない（管理ページのノードグラフで接続する）` };
   return { ok: true };
 }
 
 /** Agent SDK の MCP サーバー（プロセス内）を、権限のあるノードの分だけ作る。権限のない操作は、そもそも公開しない */
-export function buildDirServers({ sdk, z, nodes, root }) {
+export function buildDirServers({ sdk, z, nodes, root, run }) {   // run(box, code): Python の実行（なければ run は公開しない）
   const servers = {};
   const reply = (fn) => async (args) => {
     try { return { content: [{ type: 'text', text: await fn(args) }] }; }
@@ -141,6 +149,7 @@ export function buildDirServers({ sdk, z, nodes, root }) {
     if (n.perms.read) tools.push(sdk.tool('read', `${where}の中のファイルを読む（先頭 ${MAX_READ} バイトまで）`, { path: rel }, reply((a) => box.read(a.path))));
     if (n.perms.write) tools.push(sdk.tool('write', `${where}の中にファイルを書く（上書き。親フォルダは作る。${MAX_WRITE} バイトまで）`, { path: rel, content: z.string() }, reply((a) => box.write(a.path, a.content))));
     if (n.perms.delete) tools.push(sdk.tool('delete', `${where}の中のファイル、または空のフォルダを削除する`, { path: rel }, reply((a) => box.delete(a.path))));
+    if (n.perms.exec && run) tools.push(sdk.tool('run', `${where}の中で Python（numpy・pandas・scipy・matplotlib・scikit-learn・openpyxl が使える）のコードを実行する。ネットワークなし、30 秒まで。作業ディレクトリにはこのディレクトリの中身のコピーがあり、読み込み・書き込み・削除の権限がある範囲だけが元へ戻る`, { code: z.string().describe('実行する Python のコード全体') }, reply((a) => run(box, a.code))));
     if (tools.length) servers[`${DIR_PREFIX}${n.name}`] = sdk.createSdkMcpServer({ name: `${DIR_PREFIX}${n.name}`, version: '1.0.0', tools });
   }
   return servers;

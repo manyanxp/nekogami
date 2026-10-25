@@ -47,7 +47,7 @@ describe('ディレクトリのノード', () => {
   it('権限の表示と、危険（書き込み・削除）の判定', () => {
     expect(permLabels({ list: true, read: true })).toEqual(['参照', '読み込み']);
     expect(permLabels(undefined)).toEqual([]);
-    expect([isRiskyDir(dir({ read: true })), isRiskyDir(dir({ write: true })), isRiskyDir(dir({ delete: true })), isRiskyDir(undefined)]).toEqual([false, true, true, false]);
+    expect([isRiskyDir(dir({ read: true })), isRiskyDir(dir({ write: true })), isRiskyDir(dir({ delete: true })), isRiskyDir(dir({ exec: true })), isRiskyDir(undefined)]).toEqual([false, true, true, true, false]);
     expect(isRiskyDir({ id: 'x', name: 'Bash', kind: 'builtin', pos: null })).toBe(false);
   });
   it('グラフでは、場所と権限をノードの下に出し、担当と接続できる', () => {

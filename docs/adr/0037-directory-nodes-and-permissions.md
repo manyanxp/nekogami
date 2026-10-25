@@ -28,4 +28,5 @@ rev1 の要求: 担当に指定したディレクトリを、参照・読み込�
 - 権限は**ノード単位**で、つないだすべての担当に同じに効く。担当ごとに権限を変えたいなら、ノードを分ける。
 - `workspace/` は Agent Console がホストと同じユーザーで書き込む。重要なファイルを置かない。バックアップは取らない。
 - 依存の追加: `zod`（MIT。Agent SDK の peer 依存で、ツールの引数の定義に使う）。
+- 後の追加: 権限に `exec`（Python 実行）を足した（[0038](0038-python-execution-sandbox.md)）。ノードを消すときは、担当の定義ファイルの接続も外す。
 - 関連: [0014](0014-node-graph-editor.md)、[0016](0016-agent-definition-files.md)、[0002](0002-safety-and-permissions.md)

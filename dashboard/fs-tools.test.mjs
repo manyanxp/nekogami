@@ -11,7 +11,7 @@ const mk = () => {
   fs.writeFileSync(path.join(outside, 'secret.txt'), 'SECRET');
   return { root, outside };
 };
-const node = (perms, p = 'docs') => ({ name: 'docs', path: p, description: '', perms: { list: false, read: false, write: false, delete: false, ...perms } });
+const node = (perms, p = 'docs') => ({ name: 'docs', path: p, description: '', perms: { list: false, read: false, write: false, delete: false, exec: false, ...perms } });
 
 test('権限のない操作は拒否する（既定はすべてオフ）', () => {
   const { root } = mk();
@@ -84,13 +84,15 @@ test('台帳から読む: 不正な path や名前は無視する', () => {
   ] }));
   const nodes = loadDirNodes(f);
   assert.deepEqual(nodes.map((n) => n.name), ['ok']);
-  assert.deepEqual(nodes[0].perms, { list: false, read: true, write: false, delete: false });   // true 以外は偽
+  assert.deepEqual(nodes[0].perms, { list: false, read: true, write: false, delete: false, exec: false });   // true 以外は偽
   assert.deepEqual(loadDirNodes(path.join(root, 'none.json')), []);
   assert.equal(validRel('a/../b'), false);
 });
 
 test('checkDirAccess: 権限と接続の両方が要る', () => {
-  const nodes = [node({ read: true, write: true })];
+  const nodes = [node({ read: true, write: true, exec: true })];
+  assert.equal(checkDirAccess({ nodes, callerName: 'a', toolName: 'mcp__dir-docs__run', callerTools: ['mcp__dir-docs__*'] }).ok, true);
+  assert.match(checkDirAccess({ nodes: [node({ read: true })], callerName: 'a', toolName: 'mcp__dir-docs__run', callerTools: ['mcp__dir-docs__*'] }).reason, /Python 実行/);
   const base = { nodes, callerName: 'azure-x' };
   assert.equal(checkDirAccess({ ...base, toolName: 'mcp__dir-docs__read', callerTools: ['Read', 'mcp__dir-docs__*'] }).ok, true);
   assert.equal(checkDirAccess({ ...base, toolName: 'mcp__dir-docs__write', callerTools: ['mcp__dir-docs__write'] }).ok, true);
@@ -107,8 +109,10 @@ test('buildDirServers: 権限のある操作だけを公開する', () => {
   const seen = [];
   const sdk = { tool: (name) => { seen.push(name); return { name }; }, createSdkMcpServer: (o) => ({ name: o.name, tools: o.tools.map((t) => t.name) }) };
   const z = new Proxy({}, { get: () => () => ({ describe: () => ({ optional: () => ({}) }) }) });
-  const s = buildDirServers({ sdk, z: { string: () => ({ describe: () => ({ optional: () => ({}) }) }) }, nodes: [node({ list: true, delete: true }), { ...node({}), name: 'none' }], root });
+  const zz = { string: () => ({ describe: () => ({ optional: () => ({}) }) }) };
+  const s = buildDirServers({ sdk, z: zz, nodes: [node({ list: true, delete: true, exec: true }), { ...node({}), name: 'none' }], root, run: () => '' });
   assert.deepEqual(Object.keys(s), ['dir-docs']);
-  assert.deepEqual(s['dir-docs'].tools, ['list', 'delete']);
+  assert.deepEqual(s['dir-docs'].tools, ['list', 'delete', 'run']);
+  assert.deepEqual(buildDirServers({ sdk, z: zz, nodes: [node({ exec: true })], root })['dir-docs'], undefined);   // 実行役がなければ run は出さない
   void z;
 });

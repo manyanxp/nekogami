@@ -2,13 +2,13 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { DIR_PERMS, parentChoices } from '@/lib/graph-model';
+import { DIR_PERMS, RISKY_DIR_PERMS, parentChoices } from '@/lib/graph-model';
 import { KIND_LABEL } from '@/lib/model';
 import type { DelegationRow, DirPerms, Entity, Kind, Overview, Tool } from '@/lib/types';
 import { ModelSelect } from './AdminCards';
 
 export type AddSpec = { kind: Kind | 'tool' | 'directory'; parentId?: string | null; at?: { x: number; y: number } | null };
-const NO_PERMS: DirPerms = { list: false, read: false, write: false, delete: false };
+const NO_PERMS: DirPerms = { list: false, read: false, write: false, delete: false, exec: false };
 
 /** ノード・ツールの追加。エージェントは .claude/agents/ に定義ファイルが作られる */
 export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spec: AddSpec | null; entities: Entity[]; selectedId: string | null; onClose: () => void; onDone: () => Promise<void> }) {
@@ -46,7 +46,7 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
             {isDir && <>
               <label>場所（作業領域 <code>workspace/</code> からの相対パス）<input value={f.path} onChange={(e) => set('path', e.target.value)} required placeholder="例: notes/docs" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*(/[A-Za-z0-9][A-Za-z0-9._\-]*)*" /></label>
               <fieldset><legend>担当に許す操作（既定はすべてオフ）</legend>
-                <div className="perm-row">{DIR_PERMS.map((p) => <label key={p.key} className={p.key === 'write' || p.key === 'delete' ? 'risky' : ''}><input type="checkbox" checked={perms[p.key]} onChange={(e) => setPerms({ ...perms, [p.key]: e.target.checked })} />{p.label}</label>)}</div>
+                <div className="perm-row">{DIR_PERMS.map((p) => <label key={p.key} className={RISKY_DIR_PERMS.includes(p.key) ? 'risky' : ''}><input type="checkbox" checked={perms[p.key]} onChange={(e) => setPerms({ ...perms, [p.key]: e.target.checked })} />{p.label}</label>)}</div>
               </fieldset>
               <p className="hint">作ったら、エージェントの左の ● へワイヤーでつなぐと、そのエージェントだけが使えます。</p></>}
             {isTool && !isDir && <label>ツールの種類<select value={f.tool_kind} onChange={(e) => set('tool_kind', e.target.value)}><option value="custom">custom</option><option value="mcp">mcp</option><option value="builtin">builtin</option></select></label>}
