@@ -13,10 +13,11 @@ from .icons import IconError, IconStore
 from .pynodes import MAX_VALUE, PY_TYPES, binding_errors, IDENT_RE, parse_function, parse_input
 
 KINDS = ('orchestrator', 'suborchestrator', 'agent', 'subagent')
-# 親にできる種別。orchestrator（猫神さま）は親なし。suborchestrator は orchestrator の直下
+# 親にできる種別。orchestrator（猫神さま）は親なし。suborchestrator は orchestrator か、別の suborchestrator の下（入れ子。ADR 0042）
+MAX_DEPTH = 4   # 猫神さまを 0 として、ツリーの深さの上限。実行時の CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH と合わせる
 PARENT_KINDS = {
     'orchestrator': (),
-    'suborchestrator': ('orchestrator',),
+    'suborchestrator': ('orchestrator', 'suborchestrator'),
     'agent': ('orchestrator', 'suborchestrator'),
     'subagent': ('agent', 'suborchestrator', 'orchestrator'),
 }
@@ -266,6 +267,45 @@ class Registry:
         with self._lock:
             return [e['name'] for e in self._items.values() if e.get('icon') == ref]
 
+    def _depth(self, eid):
+        """猫神さま（親なし）を 0 とした深さ"""
+        n, cur = 0, self._items.get(eid)
+        while cur and cur.get('parent_id') in self._items and n < 100:
+            cur = self._items[cur['parent_id']]
+            n += 1
+        return n
+
+    def _height(self, eid):
+        """eid の配下の、いちばん深い子までの段数（子がなければ 0）"""
+        kids = self.children(eid)
+        return 1 + max(self._height(k['id']) for k in kids) if kids else 0
+
+    def _check_tree(self, kind, parent, current):
+        """親の付け方の検査: 循環、深さの上限、サブオーケストレーターの入れ子の条件（ADR 0042）"""
+        if current:
+            p = parent
+            while p:
+                if p['id'] == current['id']:
+                    raise ValidationError('子孫を親にはできない（循環）')
+                p = self._items.get(p.get('parent_id'))
+        below = self._height(current['id']) if current else 0
+        if self._depth(parent['id']) + 1 + below > MAX_DEPTH:
+            raise ValidationError(f'ツリーは {MAX_DEPTH} 階層まで（猫神さまの下を 1 とする）')
+        if kind == 'suborchestrator' and parent['kind'] == 'suborchestrator':
+            for who, e in (('親', parent), ('子', current)):
+                if e and (e.get('definition') or {}).get('kind') != 'agent-md':
+                    raise ValidationError(f'サブオーケストレーターを入れ子にできるのは、定義ファイル（.claude/agents/）のあるものだけ: {who} {e["name"]}')
+            try:
+                tools = self.defs.read(parent['definition'])['tools']
+            except (DefinitionError, OSError) as ex:
+                raise ValidationError(f'親の定義ファイルを読めない: {ex}')
+            if tools is not None and not any(t.split('(')[0] == 'Agent' for t in tools):
+                raise ValidationError(f'親 {parent["name"]} の tools に Agent がない（配下を呼べない）。先に Agent を足してほしい')
+
+    def _is_top(self, e):
+        """猫神さま直下のサブオーケストレーター（委任先一覧に載せる対象）"""
+        return e['kind'] == 'suborchestrator' and (self._items.get(e.get('parent_id')) or {}).get('kind') == 'orchestrator'
+
     def children(self, eid):
         return [e for e in self._items.values() if e.get('parent_id') == eid]
 
@@ -299,6 +339,8 @@ class Registry:
                 raise ValidationError(f'{kind} の親は {PARENT_KINDS[kind]} のいずれかを指定する')
             if current and parent_id == current['id']:
                 raise ValidationError('自分自身を親にできない')
+            if not current or parent_id != current.get('parent_id'):   # 親を付ける・付け替えるときだけ
+                self._check_tree(kind, parent, current)
         tags = data.get('tags') or []
         if not isinstance(tags, list) or not all(isinstance(t, str) and len(t) <= 32 for t in tags):
             raise ValidationError('tags は文字列の配列')
@@ -333,6 +375,8 @@ class Registry:
     def create(self, data, eid=None, protected=False, definition=None):
         with self._lock:
             body = self._validate(data)
+            if body['kind'] == 'suborchestrator' and (self._items.get(body['parent_id']) or {}).get('kind') == 'suborchestrator' and not definition:
+                raise ValidationError('入れ子のサブオーケストレーターには、定義ファイルが要る（定義ファイルつきで作る）')
             eid = eid or str(uuid.uuid4())
             e = {'id': eid, **body, 'protected': protected, 'definition': definition, 'created_at': _now(), 'updated_at': _now()}
             self._items[eid] = e
@@ -355,7 +399,10 @@ class Registry:
             except DefinitionError as ex:
                 raise ValidationError(str(ex))
             e = {**cur, **body, 'definition': definition, 'updated_at': _now()}
+            was_top = self._is_top(cur)
             self._items[eid] = e
+            if cur['kind'] == 'suborchestrator' and was_top != self._is_top(e) and (definition or {}).get('kind') == 'agent-md':
+                self._delegate_entry(e['name'], e['description'], remove=was_top)   # 入れ子になったら委任先から外し、猫神さま直下に戻ったら載せる
             self._save()
             return dict(e)
 
@@ -377,7 +424,7 @@ class Registry:
                 e = self._items.pop(i, None)
                 if e and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self.defs.discard(e['definition']['path'])        # 削除ではなく trash へ移す
-                if e and e['kind'] == 'suborchestrator' and (e.get('definition') or {}).get('kind') == 'agent-md':
+                if e and self._is_top(e) and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self._delegate_entry(e['name'], remove=True)   # 定義ファイルごと消えるものだけ。台帳だけを外すときは委任設定を残す
             self._save()
             return ids
@@ -520,10 +567,12 @@ class Registry:
         return list(dict.fromkeys(by_name[n] for n in (entry_node(x) for x in (entries or [])) if n in by_name))
 
     def _group_for(self, body, name):
-        """定義ファイルを置くフォルダ名。サブオーケストレーターは自分の名前、それ以外は親の名前。"""
-        if body['kind'] == 'suborchestrator':
+        """定義ファイルを置くフォルダ名。猫神さま直下のサブオーケストレーターは自分の名前、それ以外は親の名前
+        （入れ子のサブオーケストレーターも親のフォルダに置く。自分の配下は、自分の名前のフォルダ）。"""
+        parent = self._items.get(body.get('parent_id')) or {}
+        if body['kind'] == 'suborchestrator' and parent.get('kind') != 'suborchestrator':
             return name
-        return self._items[body['parent_id']]['name']
+        return parent['name']
 
     def _node_host(self, cur):
         """ディレクトリ・LLM のノードのツール（定義ファイルの tools）を書き込む先の担当。
@@ -597,7 +646,7 @@ class Registry:
                 current = self.defs.read(d)['tools'] or []
                 tools = merge_tools(current, self._tool_names(body['tool_ids']), self._catalog())
             self.defs._check(body['description'], body['model'], tools)
-            if body['kind'] != 'suborchestrator' and body['parent_id'] != cur['parent_id']:
+            if body['parent_id'] != cur['parent_id']:
                 d['path'] = self.defs.move(d['path'], self._group_for(body, body['name']))
             self.defs.write(d, description=body['description'] if body['description'] != cur['description'] else None,
                             model=body['model'] if body['model'] != cur['model'] else None,
@@ -619,7 +668,7 @@ class Registry:
         try:
             own_new = None
             if d and d['kind'] == 'agent-md':
-                group = new if cur['kind'] == 'suborchestrator' else self._items[cur['parent_id']]['name']
+                group = self._group_for(cur, new)
                 own_new = self.defs.agent_path(group, new)
                 if own_new != d['path'] and self.defs.exists(own_new):
                     raise DefinitionError(f'{own_new} は既にある')
@@ -683,7 +732,7 @@ class Registry:
             e = {'id': eid, **body, 'description': body['description'] or name, 'protected': False,
                  'definition': {'kind': 'agent-md', 'path': rel}, 'created_at': _now(), 'updated_at': _now()}
             self._items[eid] = e
-            if kind == 'suborchestrator':
+            if self._is_top(e):
                 self._delegate_entry(name, e['description'])
             self._save()
             return dict(e)
@@ -794,7 +843,7 @@ class Registry:
         """猫神さま（保護されたエンティティ）の状態と、委任先設定（suborchestrators.json）・定義ファイルと台帳の突き合わせ。"""
         with self._lock:
             neko = next((dict(e) for e in self._items.values() if e.get('protected')), None)
-            subs = {e['name']: dict(e) for e in self._items.values() if e['kind'] == 'suborchestrator'}
+            subs = {e['name']: dict(e) for e in self._items.values() if self._is_top(e)}   # 委任先に載るのは、猫神さま直下だけ
             count = {k: sum(1 for e in self._items.values() if e['kind'] == k) for k in KINDS}
             for e in subs.values():
                 e['children'] = sum(1 for c in self._items.values() if c.get('parent_id') == e['id'])
@@ -807,7 +856,7 @@ class Registry:
                     missing.append({'id': e['id'], 'name': e['name'], 'path': d['path']})
                     continue
                 parts = d['path'].split('/')
-                want = e['name'] if e['kind'] == 'suborchestrator' else (self._items.get(e['parent_id']) or {}).get('name')
+                want = e['name'] if self._is_top(e) else (self._items.get(e['parent_id']) or {}).get('name')
                 if want and (len(parts) != 4 or parts[2] != want):
                     misplaced.append({'id': e['id'], 'name': e['name'], 'path': d['path'], 'expected': f'.claude/agents/{want}/{e["name"]}.md'})
         try:
@@ -890,7 +939,7 @@ class Registry:
                     except ValidationError:
                         continue      # 1 つの不正な定義で同期全体を止めない
                 ent = next(e for e in self._items.values() if e['name'] == a['name'])
-                if ent['kind'] == 'suborchestrator':
+                if self._is_top(ent):
                     self._delegate_entry(ent['name'], ent['description'])
             self._save()
         return created
@@ -905,6 +954,10 @@ class Registry:
         name, group = a['name'], a['group']
         if a['role'] == 'suborchestrator':
             kind, parent = 'suborchestrator', neko_id
+            outer = next((e for e in self._items.values() if e['name'] == group and e['kind'] == 'suborchestrator' and group != name
+                          and (e.get('definition') or {}).get('kind') == 'agent-md'), None)
+            if outer:   # 別のサブオーケストレーターのフォルダにある。入れ子（ADR 0042）
+                parent = outer['id']
         else:
             parent = next((e['id'] for e in self._items.values() if e['name'] == group and e['kind'] in ('orchestrator', 'suborchestrator', 'agent')), None) \
                 if group else root_id

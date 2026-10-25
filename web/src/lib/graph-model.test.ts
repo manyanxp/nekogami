@@ -95,3 +95,26 @@ describe('Python ノードと入力ノード', () => {
     expect(g.edges).toContainEqual({ id: 'input:i1>p1', type: 'input', from: 'i1', to: 'p1' });
   });
 });
+
+describe('サブオーケストレーターの入れ子', () => {
+  const def = { kind: 'agent-md', path: 'x' } as Entity['definition'];
+  const S = (id: string, parent: string, definition: Entity['definition'] = def): Entity => ({ ...E(id, 'suborchestrator', id, parent), definition });
+  it('サブオーケストレーターの下にサブオーケストレーターをつなげる（定義ファイルがあるものだけ）', () => {
+    const es = [E('o', 'orchestrator', 'neko'), S('a', 'o'), S('b', 'o'), S('bare', 'o', null)];
+    expect(canConnect(es, [], 'a', 'b')).toMatchObject({ ok: true, action: 'reparent' });
+    expect(canConnect(es, [], 'a', 'bare').ok).toBe(false);
+    expect(canConnect(es, [], 'bare', 'b').ok).toBe(false);
+  });
+  it('循環と、4 階層の上限は断る', () => {
+    const es = [E('o', 'orchestrator', 'neko'), S('a', 'o'), S('b', 'a'), S('c', 'b'), E('w', 'agent', 'w', 'c'), E('s', 'subagent', 's', 'o')];
+    expect(canConnect(es, [], 'c', 'a').ok).toBe(false);   // 子孫を親にする（循環）
+    expect(canConnect(es, [], 'w', 's').ok).toBe(false);   // 猫神さま → a → b → c → w → s は 5 階層
+    expect(canConnect(es, [], 'c', 's').ok).toBe(true);    // c の下なら 4 階層
+  });
+  it('親の選択肢は、深さの上限を超えるものを出さない', () => {
+    const es = [E('o', 'orchestrator', 'neko'), S('a', 'o'), S('b', 'a'), S('c', 'b')];
+    expect(parentChoices(es, 'agent').map((e) => e.id)).toEqual(['o', 'a', 'b', 'c']);
+    const more = [...es, S('d', 'c')];
+    expect(parentChoices(more, 'agent').map((e) => e.id)).not.toContain('d');   // d の下は 5 階層目
+  });
+});

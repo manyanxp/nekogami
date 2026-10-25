@@ -269,6 +269,49 @@ class RegistryTest(Base):
         self.reg.delete_tool(node['id'])
         self.assertNotIn('llm-local-qwen', self._agent_text('.claude/agents/x.md'))
 
+    def test_nested_suborchestrators(self):
+        """サブオーケストレーターの入れ子（ADR 0042）: 置き場所、委任先、深さ、循環、条件"""
+        self.reg.sync_builtin('http://x')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text('{}')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        a = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-a', 'parent_id': neko['id']})
+        b = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-b', 'parent_id': a['id']})
+        self.assertEqual(b['definition']['path'], '.claude/agents/sub-a/sub-b.md')               # 親のフォルダに置く
+        c = self.reg.create_claude({'kind': 'agent', 'name': 'work-c', 'parent_id': b['id']})
+        self.assertEqual(c['definition']['path'], '.claude/agents/sub-b/work-c.md')               # 自分の配下は、自分の名前のフォルダ
+        dj = json.loads((self.root / 'nekogamisama' / 'suborchestrators.json').read_text())
+        self.assertIn('sub-a', dj)
+        self.assertNotIn('sub-b', dj)                                                              # 委任先に載るのは、猫神さま直下だけ
+        self.assertEqual(sorted(r['name'] for r in self.reg.admin_overview()['delegation'] if r['registered']), ['azure-sage', 'sub-a'])
+        self.assertEqual([m['name'] for m in self.reg.admin_overview()['misplaced'] if m['name'] != 'azure-x'], [])
+        # 深さの上限（猫神さまの下を 1 として 4 階層）
+        d = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-d', 'parent_id': b['id']})
+        deep = self.reg.create_claude({'kind': 'agent', 'name': 'deep-ok', 'parent_id': d['id']})   # 猫神さま → a → b → d → 担当 = 4 階層
+        with self.assertRaises(ValidationError):
+            self.reg.create_claude({'kind': 'subagent', 'name': 'too-deep', 'parent_id': deep['id']})
+        # 循環と、Agent のない親
+        with self.assertRaises(ValidationError):
+            self.reg.update(a['id'], {'parent_id': d['id']})
+        self.reg.update(d['id'], {'tool_ids': self.reg.get(d['id'])['tool_ids'][:0]})
+        with self.assertRaises(ValidationError):
+            self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-e', 'parent_id': d['id']})
+        # 付け替え: 猫神さま直下へ戻すと、ファイルが自分のフォルダに移り、委任先に載る。配下は付いてくる
+        self.reg.update(b['id'], {'parent_id': neko['id']})
+        self.assertEqual(self.reg.get(b['id'])['definition']['path'], '.claude/agents/sub-b/sub-b.md')
+        self.assertIn('sub-b', json.loads((self.root / 'nekogamisama' / 'suborchestrators.json').read_text()))
+        self.assertEqual([m['name'] for m in self.reg.admin_overview()['misplaced'] if m['name'] != 'azure-x'], [])
+        # 名前の変更でも、配下のファイルが付いてくる
+        self.reg.update(a['id'], {'parent_id': neko['id'], 'name': 'sub-a2'})
+        self.reg.update(b['id'], {'parent_id': a['id']})
+        self.assertEqual(self.reg.get(b['id'])['definition']['path'], '.claude/agents/sub-a2/sub-b.md')
+        self.reg.update(b['id'], {'name': 'sub-b2'})
+        self.assertEqual(self.reg.get(c['id'])['definition']['path'], '.claude/agents/sub-b2/work-c.md')
+        self.assertEqual([m['name'] for m in self.reg.admin_overview()['misplaced'] if m['name'] != 'azure-x'], [])
+        # 定義ファイルのないものは、入れ子にできない
+        with self.assertRaises(ValidationError):
+            self.reg.create({'kind': 'suborchestrator', 'name': 'bare', 'parent_id': a['id']})
+
     def test_python_and_input_nodes(self):
         """Python ノード（関数のコード）と入力ノード（引数の既定値）。コードは実行せず検証する（ADR 0041）"""
         code = 'def main(n: int, tags: list = None):\n    """合計"""\n    return n\n'

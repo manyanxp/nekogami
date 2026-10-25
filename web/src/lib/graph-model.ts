@@ -9,9 +9,10 @@ export const PY_TYPES: { key: PyType; example: string }[] = [
 ];
 export const PY_SAMPLE = 'def main(x: int, label: str = "a"):\n    """説明（1 行目が担当に見える）"""\n    return {"x2": x * 2, "label": label}\n';
 
+export const MAX_DEPTH = 4;   // ツリーの深さの上限（猫神さまを 0 とする）。バックエンドの MAX_DEPTH、実行時の CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH と同じ
 export const PARENT_KINDS: Record<Kind, Kind[]> = {
   orchestrator: [],
-  suborchestrator: ['orchestrator'],
+  suborchestrator: ['orchestrator', 'suborchestrator'],   // 入れ子にできる（ADR 0042）
   agent: ['orchestrator', 'suborchestrator'],
   subagent: ['agent', 'suborchestrator', 'orchestrator'],
 };
@@ -117,6 +118,8 @@ export function canConnect(entities: Entity[], tools: Tool[], fromId: string, to
   if (to.protected) return { ok: false, reason: '猫神さまの親は変更できない' };
   if (!PARENT_KINDS[to.kind].includes(from.kind)) return { ok: false, reason: `${to.kind} の親にできない種別: ${from.kind}` };
   if (isDescendant(entities, to.id, from.id)) return { ok: false, reason: '子孫を親にはできない（循環）' };
+  const fit = nestable(entities, to.kind, from, to);
+  if (!fit.ok) return fit;
   if (to.parent_id === from.id) return { ok: false, reason: 'すでに親子になっている' };
   return { ok: true, action: 'reparent', from, to };
 }
@@ -125,4 +128,24 @@ export function canConnect(entities: Entity[], tools: Tool[], fromId: string, to
 export const childKinds = (kind: Kind): Kind[] => (['suborchestrator', 'agent', 'subagent'] as Kind[]).filter((k) => PARENT_KINDS[k].includes(kind));
 
 /** 新規ノードの作成時に選べる親（種別の規則に合うもの） */
-export const parentChoices = (entities: Entity[], kind: Kind): Entity[] => entities.filter((e) => PARENT_KINDS[kind].includes(e.kind));
+export const parentChoices = (entities: Entity[], kind: Kind): Entity[] => entities.filter((e) => PARENT_KINDS[kind].includes(e.kind) && nestable(entities, kind, e, null).ok);
+
+export function depthOf(entities: Entity[], id: string): number {
+  const byId = new Map(entities.map((e) => [e.id, e]));
+  let n = 0;
+  for (let cur = byId.get(id); cur?.parent_id && byId.has(cur.parent_id) && n < 100; cur = byId.get(cur.parent_id)) n++;
+  return n;
+}
+/** id の配下のいちばん深い子までの段数（子がなければ 0） */
+export function heightOf(entities: Entity[], id: string): number {
+  const kids = entities.filter((e) => e.parent_id === id);
+  return kids.length ? 1 + Math.max(...kids.map((k) => heightOf(entities, k.id))) : 0;
+}
+/** child（新規なら null）を parent の下に置けるか。深さと、サブオーケストレーターの入れ子の条件（バックエンドが正。ここは操作中の即時の案内） */
+export function nestable(entities: Entity[], kind: Kind, parent: Entity, child: Entity | null): { ok: true } | { ok: false; reason: string } {
+  if (depthOf(entities, parent.id) + 1 + (child ? heightOf(entities, child.id) : 0) > MAX_DEPTH) return { ok: false, reason: `ツリーは ${MAX_DEPTH} 階層まで` };
+  if (kind === 'suborchestrator' && parent.kind === 'suborchestrator') {
+    for (const e of [parent, child]) if (e && e.definition?.kind !== 'agent-md') return { ok: false, reason: `入れ子にできるのは、定義ファイルのあるサブオーケストレーターだけ（${e.name} にはない）` };
+  }
+  return { ok: true };
+}
