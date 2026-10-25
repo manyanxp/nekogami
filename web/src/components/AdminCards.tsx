@@ -2,10 +2,10 @@
 // 管理ページ左の列のカード（テーマ・性格・猫神さま・委任先・選択中）
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { DANGEROUS_TOOLS, modelOptions } from '@/lib/graph-model';
+import { DANGEROUS_TOOLS, DIR_PERMS, modelOptions } from '@/lib/graph-model';
 import { KIND_LABEL } from '@/lib/model';
 import { DEFAULT_THEME, PRESETS, applyTheme, saveThemeCache } from '@/lib/theme';
-import type { DelegationRow, Entity, EntityDefinition, Overview, Personality, Theme, Tool } from '@/lib/types';
+import type { DelegationRow, DirPerms, Entity, EntityDefinition, Overview, Personality, Theme, Tool } from '@/lib/types';
 import { useToast } from './Toast';
 import { IconPicker } from './IconPicker';
 
@@ -145,8 +145,31 @@ export function Inspector({ sel, entities, tools, guarded, reload, onRename, emb
         {e.description && <p className="hint">{e.description}</p>}
         {e.definition ? <DefinitionPanel key={e.id} e={e} guarded={guarded} /> : <p className="hint">定義ファイルのないエンティティです（Docker などで外部管理）。プロンプトとツールは台帳では編集できません。</p>}
       </>}
-      {t && <><div className="row"><span className="badge">{t.kind}</span>{t.name}</div><div className="row"><b>接続数</b>{entities.filter((x) => x.tool_ids.includes(t.id)).length}</div>{t.description && <p className="hint">{t.description}</p>}</>}
+      {t && <><div className="row"><span className="badge">{t.kind}</span>{t.name}</div><div className="row"><b>接続数</b>{entities.filter((x) => x.tool_ids.includes(t.id)).length}</div>{t.description && <p className="hint">{t.description}</p>}
+        {t.kind === 'directory' && <DirectoryPanel key={t.id} t={t} connected={entities.filter((x) => x.tool_ids.includes(t.id)).map((x) => x.name)} guarded={guarded} reload={reload} />}</>}
     </section>
+  );
+}
+
+/** ディレクトリのノードの編集: 場所と権限（チェックボックス）。権限の変更は、つないである担当に次のチャットから効く */
+function DirectoryPanel({ t, connected, guarded, reload }: { t: Tool; connected: string[]; guarded: <T>(fn: () => Promise<T>) => Promise<T | undefined>; reload: () => Promise<void> }) {
+  const toast = useToast();
+  const [path, setPath] = useState(t.path || '');
+  const [perms, setPerms] = useState<DirPerms>({ list: !!t.perms?.list, read: !!t.perms?.read, write: !!t.perms?.write, delete: !!t.perms?.delete });
+  const dirty = path !== (t.path || '') || DIR_PERMS.some((p) => perms[p.key] !== !!t.perms?.[p.key]);
+  const escalates = DIR_PERMS.some((p) => (p.key === 'write' || p.key === 'delete') && perms[p.key] && !t.perms?.[p.key]);
+  return (
+    <div className="defpanel">
+      <label>場所（<code>workspace/</code> からの相対パス）<input value={path} onChange={(e) => setPath(e.target.value)} maxLength={600} /></label>
+      <div className="perm-row" role="group" aria-label="担当に許す操作">
+        {DIR_PERMS.map((p) => <label key={p.key} className={p.key === 'write' || p.key === 'delete' ? 'risky' : ''}><input type="checkbox" checked={perms[p.key]} onChange={(e) => setPerms({ ...perms, [p.key]: e.target.checked })} />{p.label}</label>)}
+      </div>
+      <p className="hint">つないである担当: {connected.join(', ') || '（なし）'}。権限は、つないだすべての担当に同じに効きます。</p>
+      <button className="primary" disabled={!dirty} onClick={() => void guarded(async () => {
+        if (escalates && connected.length && !window.confirm(`書き込み・削除を許すと、${connected.join('、')} が ${t.path} の中のファイルを変更・削除できるようになります。よろしいですか？`)) return;
+        await api.updateTool(t.id, { path, perms }); toast(`${t.name} を保存しました`); await reload();
+      })}>保存</button>
+    </div>
   );
 }
 

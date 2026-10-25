@@ -1,6 +1,6 @@
 // ノードグラフ用の純粋ロジック（描画は @xyflow/react、通信は api.ts）。
 // 親子の規則はバックエンド（registry.py の PARENT_KINDS）が正。ここは操作中に即座に可否を示すための写し。
-import type { Entity, Kind, Tool } from './types';
+import type { DirPerm, DirPerms, Entity, Kind, Tool } from './types';
 
 export const PARENT_KINDS: Record<Kind, Kind[]> = {
   orchestrator: [],
@@ -22,6 +22,13 @@ export function modelOptions(current = ''): [string, string][] {
 
 /** 書き込み・実行ができるツール。新しく接続するときは確認する（バックエンドも確認なしでは拒否する） */
 export const DANGEROUS_TOOLS = ['Bash', 'Write', 'Edit', 'NotebookEdit'];
+
+/** ディレクトリのノードの権限（表示順）。参照 = 一覧、読み込み、書き込み、削除 */
+export const DIR_PERMS: { key: DirPerm; label: string }[] = [{ key: 'list', label: '参照' }, { key: 'read', label: '読み込み' }, { key: 'write', label: '書き込み' }, { key: 'delete', label: '削除' }];
+export const permLabels = (perms?: Partial<DirPerms>) => DIR_PERMS.filter((p) => perms?.[p.key]).map((p) => p.label);
+/** 書き込み・削除ができるディレクトリ。担当に新しく接続するときは確認が要る */
+export const isRiskyDir = (t?: Tool) => t?.kind === 'directory' && !!(t.perms?.write || t.perms?.delete);
+const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind);
 
 const COL = 270;
 const ROW = 84;
@@ -54,7 +61,7 @@ export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNod
   const toolX = (maxDepth + 1) * COL + 40;
   const nodes: GraphNode[] = [];
   for (const e of entities) nodes.push({ id: e.id, type: 'entity', kind: e.kind, label: e.name, sub: e.model || '', protected: !!e.protected, icon: e.icon || null, ...(e.pos || auto.get(e.id) || { x: 0, y: 0 }) });
-  tools.forEach((t, i) => nodes.push({ id: t.id, type: 'tool', kind: t.kind, label: t.name, sub: t.kind, protected: false, ...(t.pos || { x: toolX, y: i * 64 }) }));
+  tools.forEach((t, i) => nodes.push({ id: t.id, type: 'tool', kind: t.kind, label: t.name, sub: toolSub(t), protected: false, ...(t.pos || { x: toolX, y: i * 64 }) }));
   const known = new Set(nodes.map((n) => n.id));
   const edges: GraphEdge[] = [];
   for (const e of entities) {

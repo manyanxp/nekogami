@@ -2,23 +2,26 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { parentChoices } from '@/lib/graph-model';
+import { DIR_PERMS, parentChoices } from '@/lib/graph-model';
 import { KIND_LABEL } from '@/lib/model';
-import type { DelegationRow, Entity, Kind, Overview, Tool } from '@/lib/types';
+import type { DelegationRow, DirPerms, Entity, Kind, Overview, Tool } from '@/lib/types';
 import { ModelSelect } from './AdminCards';
 
-export type AddSpec = { kind: Kind | 'tool'; parentId?: string | null; at?: { x: number; y: number } | null };
+export type AddSpec = { kind: Kind | 'tool' | 'directory'; parentId?: string | null; at?: { x: number; y: number } | null };
+const NO_PERMS: DirPerms = { list: false, read: false, write: false, delete: false };
 
 /** ノード・ツールの追加。エージェントは .claude/agents/ に定義ファイルが作られる */
 export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spec: AddSpec | null; entities: Entity[]; selectedId: string | null; onClose: () => void; onDone: () => Promise<void> }) {
-  const [f, setF] = useState({ name: '', description: '', parent_id: '', model: '', prompt: '', tool_kind: 'custom' });
+  const [f, setF] = useState({ name: '', description: '', parent_id: '', model: '', prompt: '', tool_kind: 'custom', path: '' });
+  const [perms, setPerms] = useState<DirPerms>(NO_PERMS);
   const [err, setErr] = useState('');
-  const isTool = spec?.kind === 'tool';
+  const isDir = spec?.kind === 'directory';
+  const isTool = spec?.kind === 'tool' || isDir;
   const opts = spec && !isTool ? parentChoices(entities, spec.kind as Kind) : [];
   useEffect(() => {
     if (!spec) return;
     const pre = opts.find((o) => o.id === (spec.parentId || selectedId));
-    setF({ name: '', description: '', parent_id: pre?.id || opts[0]?.id || '', model: '', prompt: '', tool_kind: 'custom' }); setErr('');
+    setF({ name: '', description: '', parent_id: pre?.id || opts[0]?.id || '', model: '', prompt: '', tool_kind: 'custom', path: '' }); setPerms(NO_PERMS); setErr('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec]);
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -26,7 +29,8 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
     ev.preventDefault();
     const pos = spec?.at ? { x: Math.round(spec.at.x / 10) * 10, y: Math.round(spec.at.y / 10) * 10 } : undefined;
     try {
-      if (isTool) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: f.tool_kind, pos });
+      if (isDir) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'directory', path: f.path.trim(), perms, pos });
+      else if (isTool) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: f.tool_kind, pos });
       else await api.createAgent({ kind: spec!.kind, name: f.name.trim(), description: f.description.trim(), parent_id: f.parent_id || null, model: f.model, prompt: f.prompt.trim(), pos });
       onClose(); await onDone();
     } catch (e) { setErr((e as Error).message); }
@@ -36,10 +40,16 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
       <Dialog.Portal><Dialog.Overlay className="dlg-overlay" />
         <Dialog.Content className="dlg" aria-describedby={undefined}>
           <form onSubmit={submit}>
-            <Dialog.Title asChild><h2>{isTool ? 'ツールを追加' : `${spec ? KIND_LABEL[spec.kind as Kind] : ''}を追加（Claude のエージェント定義を作成）`}</h2></Dialog.Title>
-            <label>名前<input value={f.name} onChange={(e) => set('name', e.target.value)} required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" placeholder="例: cost-agent" /></label>
+            <Dialog.Title asChild><h2>{isDir ? 'ディレクトリを追加' : isTool ? 'ツールを追加' : `${spec ? KIND_LABEL[spec.kind as Kind] : ''}を追加（Claude のエージェント定義を作成）`}</h2></Dialog.Title>
+            <label>名前<input value={f.name} onChange={(e) => set('name', e.target.value)} required pattern={isDir ? '[A-Za-z0-9][A-Za-z0-9\\-]{0,39}' : '[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}'} placeholder="例: cost-agent" /></label>
             {!isTool && <label>親<select value={f.parent_id} onChange={(e) => set('parent_id', e.target.value)}>{opts.map((o) => <option key={o.id} value={o.id}>{o.name}（{KIND_LABEL[o.kind]}）</option>)}</select></label>}
-            {isTool && <label>ツールの種類<select value={f.tool_kind} onChange={(e) => set('tool_kind', e.target.value)}><option value="custom">custom</option><option value="mcp">mcp</option><option value="builtin">builtin</option></select></label>}
+            {isDir && <>
+              <label>場所（作業領域 <code>workspace/</code> からの相対パス）<input value={f.path} onChange={(e) => set('path', e.target.value)} required placeholder="例: notes/docs" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*(/[A-Za-z0-9][A-Za-z0-9._\-]*)*" /></label>
+              <fieldset><legend>担当に許す操作（既定はすべてオフ）</legend>
+                <div className="perm-row">{DIR_PERMS.map((p) => <label key={p.key} className={p.key === 'write' || p.key === 'delete' ? 'risky' : ''}><input type="checkbox" checked={perms[p.key]} onChange={(e) => setPerms({ ...perms, [p.key]: e.target.checked })} />{p.label}</label>)}</div>
+              </fieldset>
+              <p className="hint">作ったら、エージェントの左の ● へワイヤーでつなぐと、そのエージェントだけが使えます。</p></>}
+            {isTool && !isDir && <label>ツールの種類<select value={f.tool_kind} onChange={(e) => set('tool_kind', e.target.value)}><option value="custom">custom</option><option value="mcp">mcp</option><option value="builtin">builtin</option></select></label>}
             {!isTool && <label>モデル<ModelSelect value={f.model} onChange={(v) => set('model', v)} /></label>}
             <label>説明<input value={f.description} maxLength={300} onChange={(e) => set('description', e.target.value)} /></label>
             {!isTool && <label>プロンプト（空なら雛形を使う）<textarea rows={6} maxLength={50000} value={f.prompt} onChange={(e) => set('prompt', e.target.value)} placeholder="あなたは…です。" /></label>}

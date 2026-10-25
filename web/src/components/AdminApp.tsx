@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { DANGEROUS_TOOLS, canConnect, childKinds } from '@/lib/graph-model';
+import { DANGEROUS_TOOLS, canConnect, childKinds, isRiskyDir, permLabels } from '@/lib/graph-model';
 import { KIND_LABEL } from '@/lib/model';
 import { loadTheme } from '@/lib/theme';
 import type { DelegationRow, Entity, Kind, Overview, Tool } from '@/lib/types';
@@ -97,6 +97,10 @@ function Admin() {
       if (r.from.definition) {
         const def = await api.definition(fromId);
         if (def.tools === null && !window.confirm(`${r.from.name} は tools を指定しておらず、全ツールを継承しています。接続すると、接続したツールだけに制限されます。続けますか？`)) return;
+        if (isRiskyDir(r.to)) {
+          if (!window.confirm(`${r.to.name}（${r.to.path}）は ${permLabels(r.to.perms).join('・')} ができるディレクトリです。${r.from.name} に許可しますか？（定義ファイルの tools に追記されます）`)) return;
+          patch.allow_dangerous = true;
+        }
         if (DANGEROUS_TOOLS.includes(r.to.name)) {
           if (!window.confirm(`${r.to.name} は書き込み・実行ができるツールです。${r.from.name} に許可しますか？（定義ファイルの tools に追記されます）`)) return;
           patch.allow_dangerous = true;
@@ -166,12 +170,13 @@ function Admin() {
           <div className="toolbar">
             {(['suborchestrator', 'agent', 'subagent'] as const).map((k) => <button key={k} onClick={() => setAdding({ kind: k })}><Icon name="add" size={18} />{KIND_LABEL[k]}</button>)}
             <button onClick={() => setAdding({ kind: 'tool' })}><Icon name="tool" size={18} />ツール</button>
+            <button onClick={() => setAdding({ kind: 'directory' })}><Icon name="folder" size={18} />ディレクトリ</button>
             <span className="sep" />
             <button className="danger" disabled={!selDeletable} onClick={() => void deleteSelected()}><Icon name="delete" size={18} />選択を削除 (Del)</button>
             <button onClick={() => setFitKey((k) => k + 1)}><Icon name="expand" size={18} />全体表示</button>
             <button onClick={resetLayout} title="手動配置を破棄して自動配置に戻す"><Icon name="refresh" size={18} />自動整列</button>
             <span className="grow" />
-            <span className="legend"><i className="lg suborchestrator" />サブオーケストレーター <i className="lg agent" />エージェント <i className="lg subagent" />サブエージェント <i className="lg tool" />ツール</span>
+            <span className="legend"><i className="lg suborchestrator" />サブオーケストレーター <i className="lg agent" />エージェント <i className="lg subagent" />サブエージェント <i className="lg tool" />ツール <i className="lg dir" />ディレクトリ</span>
           </div>
           <AdminGraph entities={entities} tools={tools} fitKey={fitKey} selected={sel} onSelect={setSel} onMove={onMove} onConnect={onConnect} onContext={onContext} />
           <p className="hint tips">操作: ノードをドラッグで移動 / 背景をドラッグでパン / ホイールでズーム / 右の ● から別ノードの左の ● へドラッグして接続（親子の付け替え・ツール接続）。<b>定義ファイル（.claude/agents/）のあるものは、モデル・ツール接続・プロンプトの変更がそのファイルに書き込まれます（元のファイルは portal/data/backups に退避）。</b></p>

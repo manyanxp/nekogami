@@ -5,19 +5,20 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { buildGraph, canConnect, type GraphNode } from '@/lib/graph-model';
 import type { Entity, Tool } from '@/lib/types';
+import { Icon } from './Icon';
 import { Avatar } from './IconPicker';
 
 export type Sel = { type: 'node' | 'edge'; id: string } | null;
 export interface CtxTarget { clientX: number; clientY: number; x: number; y: number; target: { type: 'node' | 'edge' | 'bg'; id?: string } }
 
-type NodeData = { label: string; sub: string; kind: string; protected: boolean; isTool: boolean; icon: string | null };
+type NodeData = { label: string; sub: string; kind: string; protected: boolean; isTool: boolean; isDir: boolean; icon: string | null };
 
 function NekoNode({ data, selected }: NodeProps<Node<NodeData>>) {
   return (
-    <div className={`gnode ${data.kind}${selected ? ' sel' : ''}${data.protected ? ' protected' : ''}`}>
+    <div className={`gnode ${data.kind}${data.isDir ? ' dir' : ''}${selected ? ' sel' : ''}${data.protected ? ' protected' : ''}`}>
       <div className="head" />
       {!data.protected && !(data.kind === 'orchestrator') && <Handle type="target" position={Position.Left} className="port" />}
-      <div className="title">{!data.isTool && <Avatar icon={data.icon} kind={data.kind} size={18} />}{data.label}</div>
+      <div className="title">{!data.isTool && <Avatar icon={data.icon} kind={data.kind} size={18} />}{data.isDir && <Icon name="folder" size={16} />}{data.label}</div>
       <div className="subtitle">{data.sub || ' '}</div>
       {!data.isTool && <Handle type="source" position={Position.Right} className="port" />}
     </div>
@@ -33,7 +34,7 @@ function Inner({ entities, tools, fitKey, selected, onSelect, onMove, onConnect,
   const g = useMemo(() => buildGraph(entities, tools), [entities, tools]);
   const built: Node<NodeData>[] = useMemo(() => g.nodes.map((n: GraphNode) => ({
     id: n.id, type: 'neko', position: { x: n.x, y: n.y }, selected: selected?.type === 'node' && selected.id === n.id,
-    data: { label: n.label, sub: n.sub, kind: n.type === 'tool' ? 'tool' : n.kind, protected: n.protected, isTool: n.type === 'tool', icon: n.icon || null },
+    data: { label: n.label, sub: n.sub, kind: n.type === 'tool' ? 'tool' : n.kind, protected: n.protected, isTool: n.type === 'tool', isDir: n.kind === 'directory', icon: n.icon || null },
   })), [g, selected]);
   // ドラッグ中の位置は、ここで持つ（制御コンポーネントは onNodesChange で位置を反映しないと動かない）。台帳が変わったら作り直す
   const [nodes, setNodes] = useState<Node<NodeData>[]>(built);

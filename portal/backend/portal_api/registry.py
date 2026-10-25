@@ -20,7 +20,11 @@ PARENT_KINDS = {
     'subagent': ('agent', 'suborchestrator', 'orchestrator'),
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
-TOOL_KINDS = ('builtin', 'mcp', 'custom')
+TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory')
+DIR_PERMS = ('list', 'read', 'write', 'delete')   # 参照（一覧）・読み込み・書き込み・削除
+DIR_SEGMENT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
+DIR_MAX_DEPTH = 8
+DIR_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9-]{0,39}$')   # MCP のサーバー名（dir-<名前>）になる。記号は置き換えられうるので、英数字とハイフンだけ
 # Claude Code の組み込みツール（ノードグラフのツールパレットに出す）。台帳上のメタ情報であり、エージェントの実際の権限は変えない（ADR 0014）
 BUILTIN_TOOLS = ('Agent', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Write', 'Edit', 'Bash')
 POS_LIMIT = 100000
@@ -65,6 +69,28 @@ def _clean_runtime(rt, project_dir: Path):
             raise ValidationError('compose_file はプロジェクト配下の .yml/.yaml のみ指定できる')
         out.update(compose_file=str(p.relative_to(project_dir)), service=svc)
     return out
+
+
+def _clean_dir_path(path):
+    """ディレクトリのノードの場所。作業用の領域（Agent Console の FS_ROOT）からの相対パス。絶対パス・`..`・隠しフォルダは不可"""
+    if not isinstance(path, str) or not path.strip():
+        raise ValidationError('path が必要（作業領域からの相対パス。例: docs/notes）')
+    path = path.strip()
+    if path.startswith(('/', '\\')) or '\\' in path:
+        raise ValidationError('path は相対パス（先頭の / や \\ は不可）')
+    parts = path.rstrip('/').split('/')
+    if len(parts) > DIR_MAX_DEPTH or not all(DIR_SEGMENT_RE.match(p) and p not in ('.', '..') for p in parts):
+        raise ValidationError(f'path は英数字と . _ - の名前を / でつないだ相対パス（先頭は英数字、{DIR_MAX_DEPTH} 階層まで。.. や絶対パスは不可）')
+    return '/'.join(parts)
+
+
+def _clean_dir_perms(perms):
+    """権限。既定はすべてオフ。指定のないものはオフ"""
+    if perms is None:
+        perms = {}
+    if not isinstance(perms, dict) or any(k not in DIR_PERMS for k in perms):
+        raise ValidationError(f'perms は {DIR_PERMS} をキーにした真偽値のオブジェクト')
+    return {k: bool(perms.get(k)) for k in DIR_PERMS}
 
 
 def _clean_pos(pos):
@@ -255,11 +281,16 @@ class Registry:
             kind = data.get('kind') or 'custom'
             if kind not in TOOL_KINDS:
                 raise ValidationError(f'kind は {TOOL_KINDS} のいずれか')
+            if kind == 'directory' and not DIR_NAME_RE.match(name):
+                raise ValidationError('ディレクトリの名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
             if any(t['name'] == name for t in self._tools.values()):
                 raise ValidationError(f'ツール "{name}" は既に使われている')
             tid = tid or str(uuid.uuid4())
             t = {'id': tid, 'name': name, 'kind': kind, 'description': str(data.get('description') or '')[:300],
                  'pos': _clean_pos(data.get('pos')), 'created_at': _now()}
+            if kind == 'directory':
+                t['path'] = _clean_dir_path(data.get('path'))
+                t['perms'] = _clean_dir_perms(data.get('perms'))
             self._tools[tid] = t
             self._save()
             return dict(t)
@@ -272,6 +303,13 @@ class Registry:
                 self._tools[tid]['pos'] = _clean_pos(patch['pos'])
             if 'description' in patch:
                 self._tools[tid]['description'] = str(patch['description'] or '')[:300]
+            if self._tools[tid]['kind'] == 'directory':   # 場所と権限は、ディレクトリのノードだけ
+                if 'path' in patch:
+                    self._tools[tid]['path'] = _clean_dir_path(patch['path'])
+                if 'perms' in patch:
+                    self._tools[tid]['perms'] = _clean_dir_perms(patch['perms'])
+            elif 'path' in patch or 'perms' in patch:
+                raise ValidationError('path と perms を持てるのは、ディレクトリのノードだけ')
             self._save()
             return dict(self._tools[tid])
 
@@ -327,6 +365,10 @@ class Registry:
                 return d
             tools = None
             if body['tool_ids'] != cur['tool_ids']:
+                added = [self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools]
+                risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in ('write', 'delete')))
+                if risky and not allow_dangerous:
+                    raise DefinitionError(f'書き込み・削除ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
                 current = self.defs.read(d)['tools'] or []
                 tools = merge_tools(current, self._tool_names(body['tool_ids']), self._catalog())
             self.defs._check(body['description'], body['model'], tools)

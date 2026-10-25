@@ -61,6 +61,8 @@ services:
       # ポータルで編集したエージェント定義・性格をすぐ反映する
       - ./.claude/agents:/app/.claude/agents:ro
       - ./nekogamisama:/app/nekogamisama
+      # ディレクトリのノード（ADR 0037）が指す作業領域。担当が読み書き・削除できるのは、この中だけ
+      - ./workspace:/app/workspace
     restart: unless-stopped
 
 volumes:

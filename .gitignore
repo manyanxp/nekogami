@@ -8,6 +8,10 @@ research/
 # 要件の元資料（個人のメモ・参考画像。出どころ不明の画像を含むのでコミットしない）
 docs/add_requirement/
 
+# 担当が読み書きする作業領域（ディレクトリのノードの置き場。中身は利用者のデータなのでコミットしない）
+workspace/*
+!workspace/.gitkeep
+
 # Python / Node
 __pycache__/
 *.pyc

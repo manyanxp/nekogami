@@ -189,6 +189,42 @@ class RegistryTest(Base):
         self.reg.update(x['id'], {'tool_ids': ids, 'allow_dangerous': True})
         self.assertIn('Bash', self._agent_text('.claude/agents/x.md'))
 
+    def test_directory_nodes(self):
+        """ディレクトリのノード: 場所の検証、権限（既定はすべてオフ）、担当への接続は定義ファイルの tools に反映（ADR 0037）"""
+        self.reg.sync_builtin('http://x')
+        x = next(e for e in self.reg.list() if e['name'] == 'azure-x')
+        d = self.reg.create_tool({'name': 'docs', 'kind': 'directory', 'path': 'notes/docs/'})
+        self.assertEqual((d['path'], d['perms']), ('notes/docs', {'list': False, 'read': False, 'write': False, 'delete': False}))
+        for bad in ('', '..', '../x', '/etc', 'a/../b', '.hidden', 'a//b', 'a b', 'x' * 65, '/'.join(['a'] * 9), None, 5):
+            with self.assertRaises(ValidationError, msg=repr(bad)):
+                self.reg.create_tool({'name': 'bad', 'kind': 'directory', 'path': bad})
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'bad2', 'kind': 'directory', 'path': 'a', 'perms': {'exec': True}})
+        for bad_name in ('my.docs', 'my_docs', 'a__b'):   # MCP のサーバー名にする。記号は不可
+            with self.assertRaises(ValidationError, msg=bad_name):
+                self.reg.create_tool({'name': bad_name, 'kind': 'directory', 'path': 'a'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(next(t['id'] for t in self.reg.list_tools() if t['name'] == 'Read'), {'path': 'a'})   # 他の種類は不可
+        # 参照・読み込みだけなら確認なしで接続でき、定義ファイルの tools に mcp__dir-docs__* が入る
+        self.reg.update_tool(d['id'], {'perms': {'list': True, 'read': True}})
+        self.reg.update(x['id'], {'tool_ids': x['tool_ids'] + [d['id']]})
+        self.assertIn('mcp__dir-docs__*', self._agent_text('.claude/agents/x.md'))
+        self.assertIn(d['id'], self.reg.get(x['id'])['tool_ids'])
+        # 書き込み・削除つきのディレクトリを新しく足すには確認が要る。失敗したらファイルも台帳も変わらない
+        w = self.reg.create_tool({'name': 'out', 'kind': 'directory', 'path': 'out', 'perms': {'write': True}})
+        ids = self.reg.get(x['id'])['tool_ids'] + [w['id']]
+        with self.assertRaises(ValidationError):
+            self.reg.update(x['id'], {'tool_ids': ids})
+        self.assertNotIn('dir-out', self._agent_text('.claude/agents/x.md'))
+        self.reg.update(x['id'], {'tool_ids': ids, 'allow_dangerous': True})
+        self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))
+        # 台帳に戻しても、ディレクトリのノードとの対応が保たれる（再取り込み）
+        self.reg.sync_builtin('http://x')
+        self.assertEqual(set(self.reg.get(x['id'])['tool_ids']) >= {d['id'], w['id']}, True)
+        # ノードを消すと、担当との接続も外れる
+        self.reg.delete_tool(d['id'])
+        self.assertNotIn(d['id'], self.reg.get(x['id'])['tool_ids'])
+
     def test_create_claude_agents_and_tree(self):
         self.reg.sync_builtin('http://x')
         (self.root / 'nekogamisama').mkdir(exist_ok=True)
