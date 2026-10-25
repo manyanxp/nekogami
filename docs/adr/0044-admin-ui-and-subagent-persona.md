@@ -1,6 +1,6 @@
 # 0044 管理ページの見直しと、サブオーケストレーターの性格
 
-- 状態: Accepted
+- 状態: Accepted（性格の保存先は [0046](0046-subagent-personality-file.md) で、personality.md を正とする形に更新）
 - 関連: [0021](0021-nekogamisama-personality.md)（猫神さまの性格）、[0042](0042-nested-suborchestrators.md)、[0043](0043-agent-calls-and-auto-spawn.md)、要件 [rev3](../requirements/20261025-rev3-admin-ui-and-persona.md)
 
 ## 決定

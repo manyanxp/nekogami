@@ -49,6 +49,7 @@ Azure Sage の設計判断と仕様の記録です。1 ファイル 1 判断、�
 | [0043](0043-agent-calls-and-auto-spawn.md) | 担当を呼ぶ接続と、担当の自動作成（読み取り専用・3 体まで） | Accepted |
 | [0044](0044-admin-ui-and-subagent-persona.md) | 管理ページの見直しと、サブオーケストレーターの性格 | Accepted |
 | [0045](0045-python-node-body-only.md) | Python ノードは処理だけを書く（引数は入力ノードから、関数は自動生成） | Accepted |
+| [0046](0046-subagent-personality-file.md) | サブオーケストレーターごとの personality.md（ファイルを正にして、定義へ自動同期） | Accepted |
 
 ## 運用ルール
 

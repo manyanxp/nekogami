@@ -48,7 +48,7 @@ export interface Overview {
 
 export interface Theme { mode: 'auto' | 'dark' | 'light'; accent: string | null; preset: string }
 /** サブオーケストレーターの性格（定義の本文の「性格・話し方」の節。ADR 0044） */
-export interface EntityPersonality { exists: boolean; name?: string; first_person: string; address: string; tone: string; traits: string }
+export interface EntityPersonality { exists: boolean; file?: boolean; name?: string; first_person: string; address: string; tone: string; traits: string }
 export interface Personality { exists: boolean; imported: boolean; first_person: string; address: string; tone: string; traits: string }
 export interface ChatCommand { name: string; kind: 'delegate' | 'agent'; type: string; how: string; description: string }
 export interface ConsoleTarget { name: string; label: string; type: string }

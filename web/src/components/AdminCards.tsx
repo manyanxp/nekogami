@@ -197,7 +197,7 @@ function EntityPersonalityPanel({ e, guarded }: { e: Entity; guarded: <T>(fn: ()
   return (
     <details className="defpanel">
       <summary>🐱 性格・口調{p.exists ? '' : '（未設定）'}</summary>
-      <p className="hint">このサブオーケストレーター自身の返答の言葉づかいに使われます（定義ファイルの「性格・話し方」の節）。事実や手順、守ることは変わりません。</p>
+      <p className="hint">このサブオーケストレーター自身の返答の言葉づかいに使われます。保存先は <code>nekogamisama/personalities/{e.name}/personality.md</code>（ファイルが正。手で編集してもよく、定義ファイルの「性格・話し方」の節へ自動で写されます）。{p.file ? '' : 'まだファイルがないので、保存すると作られます。'}事実や手順、守ることは変わりません。</p>
       <form onSubmit={(ev) => { ev.preventDefault(); void guarded(async () => { setP(await api.setEntityPersonality(e.id, { first_person: p.first_person, address: p.address, tone: p.tone, traits: p.traits })); toast(`${e.name} の性格を保存しました`); }); }}>
         <div className="two"><label>一人称<input value={p.first_person} maxLength={16} onChange={(ev) => set('first_person', ev.target.value)} /></label><label>呼びかけ<input value={p.address} maxLength={16} onChange={(ev) => set('address', ev.target.value)} /></label></div>
         <label>口調のひな形<select value="" onChange={(ev) => ev.target.value && set('tone', ev.target.value)}>{TONES.map(([v, l]) => <option key={l} value={v}>{l}</option>)}</select></label>

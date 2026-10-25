@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 import uuid
@@ -231,6 +232,7 @@ class Registry:
         self._lock = threading.RLock()
         self._items = {}
         self._load()
+        self.sync_personas()   # 手で編集した personality.md を、定義の節へ反映する（ADR 0046）
 
     # ---- 永続化 ----
     def _load(self):
@@ -478,6 +480,8 @@ class Registry:
                 e = self._items.pop(i, None)
                 if e and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self.defs.discard(e['definition']['path'])        # 削除ではなく trash へ移す
+                    if e['kind'] == 'suborchestrator':
+                        self._discard_persona(e['name'])
                 if e and self._is_top(e) and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self._delegate_entry(e['name'], remove=True)   # 定義ファイルごと消えるものだけ。台帳だけを外すときは委任設定を残す
             self._save()
@@ -769,6 +773,7 @@ class Registry:
         for eid, nd in moves:
             self._items[eid]['definition'] = nd
         self._delegate_rename(old, new)
+        self._move_persona(old, new)
 
     def get_definition(self, eid):
         e = self.get(eid)
@@ -782,6 +787,20 @@ class Registry:
         r['tools_other'] = unmapped_entries(r['tools'], self._catalog())   # グラフで操作できない項目（読み取り専用で表示）
         return r
 
+    def _discard_persona(self, name):
+        from . import personality
+        d = personality.persona_file(self.project_dir, name).parent
+        if d.is_dir():
+            self.defs.trash.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(d), str(self.defs.trash / f"persona__{name}.{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"))
+
+    def _move_persona(self, old, new):
+        """名前の変更に合わせて、personality.md のフォルダも移す（移せなければそのまま。次の保存で新しい名前に作られる）"""
+        from . import personality
+        src, dst = personality.persona_file(self.project_dir, old).parent, personality.persona_file(self.project_dir, new).parent
+        if src.is_dir() and not dst.exists():
+            shutil.move(str(src), str(dst))
+
     def _persona_target(self, eid):
         e = self.get(eid)
         if e['kind'] != 'suborchestrator' or (e.get('definition') or {}).get('kind') != 'agent-md':
@@ -789,17 +808,44 @@ class Registry:
         return e
 
     def get_persona(self, eid):
-        """サブオーケストレーターの性格（定義の本文の「性格・話し方」の節。ADR 0044）"""
+        """サブオーケストレーターの性格。nekogamisama/personalities/<名前>/personality.md が正で、定義の本文の節は自動生成（ADR 0046）。
+        ファイルがなければ、定義の本文の節（手書きを含む）を読む。ファイルがあって節とずれていれば、節を合わせる"""
         from . import personality
         e = self._persona_target(eid)
-        return {**personality.read_section(self.get_definition(eid)['prompt']), 'name': e['name']}
+        f = personality.read_persona_file(self.project_dir, e['name'])
+        if f is None:
+            return {**personality.read_section(self.get_definition(eid)['prompt']), 'name': e['name'], 'file': False}
+        self._sync_persona(e, f)
+        return {**f, 'name': e['name'], 'file': True}
+
+    def _sync_persona(self, e, f):
+        """personality.md の内容を、定義の本文の「性格・話し方」の節へ写す（違うときだけ書く）"""
+        from . import personality
+        prompt = self.get_definition(e['id'])['prompt']
+        new = personality.write_section(prompt, f, name=e['name'])
+        if new.strip() != prompt.strip():
+            self.set_prompt(e['id'], new)
+
+    def sync_personas(self):
+        """personality.md のあるサブオーケストレーターすべてで、定義の節を合わせる。手で編集したファイルを反映する"""
+        from . import personality
+        with self._lock:
+            for e in list(self._items.values()):
+                if e['kind'] == 'suborchestrator' and (e.get('definition') or {}).get('kind') == 'agent-md':
+                    f = personality.read_persona_file(self.project_dir, e['name'])
+                    if f is not None:
+                        try:
+                            self._sync_persona(e, f)
+                        except (ValidationError, personality.PersonalityError):
+                            pass   # 壊れたファイルや定義は、その担当だけ飛ばす
 
     def set_persona(self, eid, data):
         from . import personality
         with self._lock:
-            self._persona_target(eid)
+            e = self._persona_target(eid)
             try:
-                self.set_prompt(eid, personality.write_section(self.get_definition(eid)['prompt'], data))
+                f = personality.write_persona_file(self.project_dir, e['name'], data, self.defs)
+                self._sync_persona(e, f)
             except personality.PersonalityError as ex:
                 raise ValidationError(str(ex))
             return self.get_persona(eid)

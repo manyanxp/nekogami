@@ -321,14 +321,32 @@ class RegistryTest(Base):
         self.reg.set_persona(sub['id'], {'first_person': 'ぼく', 'address': 'きみ', 'tone': 'です', 'traits': ''})
         self.assertEqual(self.reg.get_definition(sub['id'])['prompt'].count('## 性格'), 1)   # 置き換えで、節は増えない
         self.assertEqual(self.reg.get_persona(sub['id'])['first_person'], 'ぼく')
-        # 手で書いた「## 性格」の箇条書きは、性格の文章として読み、保存すると節に置き換わる
-        self.reg.set_prompt(sub['id'], '# 役割\nx\n\n## 性格\n- 長女\n- 緑茶が好き\n')
-        p = self.reg.get_persona(sub['id'])
-        self.assertTrue(p['exists'])
+        # personality.md が正（ADR 0046）: 保存でファイルができ、定義の節は自動生成になる。ファイルを手で直すと、同期で節に反映される
+        pf = self.root / 'nekogamisama' / 'personalities' / 'ps-sub' / 'personality.md'
+        self.assertIn('- 一人称: ぼく', pf.read_text(encoding='utf-8'))
+        self.assertIn('自動生成', self.reg.get_definition(sub['id'])['prompt'])
+        pf.write_text(pf.read_text(encoding='utf-8').replace('ぼく', 'おれ'), encoding='utf-8')
+        self.assertEqual(self.reg.get_persona(sub['id'])['first_person'], 'おれ')
+        self.assertIn('- 一人称: おれ', self.reg.get_definition(sub['id'])['prompt'])
+        pf.write_text(pf.read_text(encoding='utf-8').replace('おれ', 'わが'), encoding='utf-8')
+        self.reg.sync_personas()   # 起動時の同期
+        self.assertIn('- 一人称: わが', self.reg.get_definition(sub['id'])['prompt'])
+        # 名前の変更でフォルダが付いてくる。削除で退避される
+        self.reg.update(sub['id'], {'name': 'ps-sub2'})
+        self.assertFalse(pf.parent.exists())
+        self.assertEqual(self.reg.get_persona(sub['id'])['first_person'], 'わが')
+        # ファイルがないものは、手で書いた「## 性格」の箇条書きを性格の文章として読む。保存するとファイルができ、節は置き換わる
+        hand = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'ps-hand', 'parent_id': neko['id']})
+        self.reg.set_prompt(hand['id'], '# 役割\nx\n\n## 性格\n- 長女\n- 緑茶が好き\n')
+        p = self.reg.get_persona(hand['id'])
+        self.assertTrue(p['exists'] and not p['file'])
         self.assertIn('緑茶が好き', p['traits'])
-        self.reg.set_persona(sub['id'], {**p})
-        self.assertIn('緑茶が好き', self.reg.get_definition(sub['id'])['prompt'])
-        self.assertEqual(self.reg.get_definition(sub['id'])['prompt'].count('## 性格'), 1)
+        self.reg.set_persona(hand['id'], {**p})
+        self.assertIn('緑茶が好き', self.reg.get_definition(hand['id'])['prompt'])
+        self.assertEqual(self.reg.get_definition(hand['id'])['prompt'].count('## 性格'), 1)
+        self.assertTrue(self.reg.get_persona(hand['id'])['file'])
+        self.reg.delete(hand['id'])
+        self.assertFalse((self.root / 'nekogamisama' / 'personalities' / 'ps-hand').exists())
         for bad in ({'tone': ''}, {'traits': '# 見出し'}, {'first_person': 'あ' * 17}):
             with self.assertRaises(ValidationError):
                 self.reg.set_persona(sub['id'], {'first_person': 'わし', 'address': '小僧', 'tone': 'です', 'traits': '', **bad})

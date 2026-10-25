@@ -103,8 +103,17 @@ SUB_SECTION_RE = re.compile(r'^## (?:性格・話し方|性格)[ \t]*\n(.*?)(?=^
 SUB_NOTE = '※ この性格と話し方は、自分の返答の言葉づかいにだけ使う。事実関係・出典・手順・守ることは、性格に関わらず変えない。'
 
 
-def render_section(f):
-    return (f"## 性格・話し方\n\n- 一人称: {f['first_person']}\n- 呼びかけ: {f['address']}\n- 口調: {f['tone']}\n\n"
+PERSONAS_DIR = Path('nekogamisama') / 'personalities'   # サブオーケストレーターごとに <名前>/personality.md（ADR 0046）
+GENERATED = '<!-- 自動生成: nekogamisama/personalities/{name}/personality.md が正。ここを直接編集しても、次の同期で上書きされる -->'
+
+
+def persona_file(project_dir, name):
+    return Path(project_dir) / PERSONAS_DIR / name / FILE.name
+
+
+def render_section(f, name=None):
+    note = f'{GENERATED.format(name=name)}\n\n' if name else ''
+    return (f"## 性格・話し方\n\n{note}- 一人称: {f['first_person']}\n- 呼びかけ: {f['address']}\n- 口調: {f['tone']}\n\n"
             f"{f['traits']}\n\n{SUB_NOTE}\n")
 
 
@@ -119,16 +128,36 @@ def read_section(prompt):
         fm = rx.search(body)
         if fm and fm[1].strip():
             f[k] = fm[1].strip()
-    rest = [ln for ln in body.split('\n') if not any(rx.match(ln) for rx in FIELD_RE.values()) and ln.strip() != SUB_NOTE]
+    rest = [ln for ln in body.split('\n') if not any(rx.match(ln) for rx in FIELD_RE.values()) and ln.strip() != SUB_NOTE and not ln.startswith('<!-- 自動生成')]
     f['traits'] = '\n'.join(rest).strip()
     return {**f, 'exists': True}
 
 
-def write_section(prompt, data):
+def write_section(prompt, data, name=None):
     """性格の節を、プロンプトの本文に書き込む（既存の節は置き換え、なければ末尾に足す）。戻り値: 新しい本文"""
     f = {k: _clean(k, data.get(k, DEFAULTS[k])) for k in LIMITS}
-    section = render_section(f)
+    section = render_section(f, name)
     prompt = prompt or ''
     if SUB_SECTION_RE.search(prompt):
         return SUB_SECTION_RE.sub(lambda _m: section + '\n', prompt, count=1).rstrip('\n') + '\n'
     return prompt.rstrip('\n') + '\n\n' + section
+
+
+def read_persona_file(project_dir, name):
+    """サブオーケストレーターの personality.md を読む。なければ None"""
+    p = persona_file(project_dir, name)
+    return {**parse(p.read_text(encoding='utf-8')), 'exists': True} if p.is_file() else None
+
+
+def write_persona_file(project_dir, name, data, defs):
+    """personality.md を書く（検査は猫神さまと同じ。既存のファイルは退避する）。書いた内容（項目）を返す"""
+    f = {k: _clean(k, data.get(k, DEFAULTS[k])) for k in LIMITS}
+    p = persona_file(project_dir, name)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.is_file():
+        defs._backup(p)
+    fd, tmp = tempfile.mkstemp(dir=p.parent, suffix='.tmp')
+    with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+        fh.write(render(f).replace('# 猫神さまの性格', f'# {name} の性格', 1))
+    os.replace(tmp, p)
+    return f
