@@ -10,11 +10,11 @@ Azure Sage が使用・同梱・参照しているものとそのライセンス
 |---|---|---|
 | Azure Sage 本体（`CLAUDE.md`、`.claude/agents/`、`dashboard/`、`portal/`、`web/`、`docs/` ほか） | **MIT**（ルートの [LICENSE](../../LICENSE)、ADR 0010）。有料・独自条件の依存は [NOTICE.md](../../NOTICE.md) | 確認済み |
 | 猫アイコン（`web/src/components/ConsoleApp.tsx` 内の SVG） | 本プロジェクトで作成（本体に準ずる） | — |
-| 太陽の猫神さまの走る GIF（原画 `icons/sun-cat-loading/sun-cat-running-256.gif`。`web/public/sun-cat-running.gif` にコピー。ポータルのチャットの考え中） | 画像生成ツールで制作（`icons/sun-cat-loading/README.txt`）。**利用条件（商用利用・再配布）は、生成ツールの規約で確認が必要** | **要確認** |
+| 太陽の猫神さまの走る GIF（原画 `icons/sun-cat-loading/sun-cat-running-256.gif`。`web/public/sun-cat-running.gif` にコピー。ポータルのチャットの考え中） | ChatGPT（OpenAI）で生成・加工（`icons/sun-cat-loading/README.txt`）。**MIT の対象外・このアプリ専用**（NOTICE.md）。商用利用は OpenAI の規約が出力の権利を利用者に渡す旨を、二次情報で確認。**原文（Terms of Use「Content」）と参照画像の出どころは未確認** | **要確認** |
 | 走る猫の GIF（`web/public/neko-run.gif`。Agent Console のチャットの考え中。`scripts/gen-neko-gif.py` が標準ライブラリだけで生成） | 本プロジェクトで作成（本体に準ずる） | — |
-| 猫神さまのアイコン（原画 `icons/cat-goddess-icons/sun_cat_goddess.png`。縮小版 `web/public/neko-goddess.png` を `scripts/make-avatar.py` で生成） | 画像生成ツールで制作（`icons/cat-goddess-icons/README.txt`）。**利用条件（商用利用・再配布）は、生成ツールの規約で確認が必要** | **要確認** |
-| ポータルのアイコン選択用の縮小版（`portal/assets/icons/`、miko / sun / munakata の 3 種。原画 `icons/cat-goddess-icons/`、`scripts/make-avatar.py` で生成） | 上と同じ（画像生成ツールで制作）。**利用条件は要確認** | **要確認** |
-| `docs-screenshot.png` | 本プロジェクトの画面キャプチャ（本体に準ずる） | — |
+| 猫神さまのアイコン（原画 `icons/cat-goddess-icons/sun_cat_goddess.png`。縮小版 `web/public/neko-goddess.png` を `scripts/make-avatar.py` で生成） | ChatGPT（OpenAI）で生成（`icons/cat-goddess-icons/README.txt`）。**MIT の対象外・このアプリ専用**（NOTICE.md）。規約の確認状況は上の GIF と同じ | **要確認** |
+| ポータルのアイコン選択用の縮小版（`portal/assets/icons/`、miko / sun / munakata の 3 種。原画 `icons/cat-goddess-icons/`、`scripts/make-avatar.py` で生成） | 上と同じ（ChatGPT で生成。**MIT の対象外・このアプリ専用**） | **要確認** |
+| `resource/`（README のスクリーンショット）、`docs-screenshot.png` | 本プロジェクトの画面キャプチャ。上の画像素材が写っているので、**MIT の対象外・このアプリ専用**（NOTICE.md） | — |
 | `docs/add_requirement/2026-10-24/reference-flow.png` | 要件の参考にした画面の画像。**出どころ・利用条件は不明**。公開する場合は、出どころを確認するか外す | **要確認** |
 
 ## 2. npm 依存
