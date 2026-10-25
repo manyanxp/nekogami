@@ -231,6 +231,19 @@ def put_entity_personality(id: str = Depends(entity_id), body: dict[str, Any] = 
     return reg.set_persona(id, body)
 
 
+@router.get('/entities/{id}/shared')
+def get_entity_shared(id: str = Depends(entity_id), reg: Registry = Depends(get_registry)):
+    """Shared Principles（サブオーケストレーターの共通プロンプトと、直下の子の使う／使わない）"""
+    return reg.get_shared(id)
+
+
+@router.put('/entities/{id}/shared')
+def put_entity_shared(id: str = Depends(entity_id), body: dict[str, Any] = Body_, reg: Registry = Depends(get_registry)):
+    if 'use' in body:   # 子が、親の共通プロンプトを使うか
+        return reg.set_use_shared(id, bool(body['use']))
+    return reg.set_shared(id, body.get('text', ''))
+
+
 @router.get('/admin/personality')
 def get_personality(reg: Registry = Depends(get_registry)):
     return personality.read(reg.project_dir)

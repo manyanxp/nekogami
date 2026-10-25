@@ -304,6 +304,53 @@ class RegistryTest(Base):
         self.assertEqual([p['name'] for p in got['params']], ['a'])
         self.assertIn('def main(a: float):', got['source'])
 
+    def test_shared_principles(self):
+        """サブオーケストレーターの Shared Principles。使う子の定義へ、直下の子だけ自動生成する（ADR 0047）"""
+        self.reg.sync_builtin('http://x')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text('{}')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        sub = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sh-sub', 'parent_id': neko['id']})
+        a1 = self.reg.create_claude({'kind': 'agent', 'name': 'sh-a1', 'parent_id': sub['id']})
+        a2 = self.reg.create_claude({'kind': 'agent', 'name': 'sh-a2', 'parent_id': sub['id']})
+        grand = self.reg.create_claude({'kind': 'subagent', 'name': 'sh-g', 'parent_id': a1['id']})
+        g = self.reg.get_shared(sub['id'])
+        self.assertEqual((g['text'], [(c['name'], c['use'], c['eligible']) for c in g['children']]), ('', [('sh-a1', False, True), ('sh-a2', False, True)]))
+        self.reg.set_shared(sub['id'], '- 日本語で答える\n- 出典を付ける')
+        self.assertNotIn('Shared Principles', self.reg.get_definition(a1['id'])['prompt'])   # 使うと決めるまで、渡さない
+        r = self.reg.set_use_shared(a1['id'], True)
+        self.assertTrue(r['as_child']['use'])
+        p = self.reg.get_definition(a1['id'])['prompt']
+        self.assertIn('## Shared Principles', p)
+        self.assertIn('- 出典を付ける', p)
+        self.assertEqual(p.count('## Shared Principles'), 1)
+        self.assertNotIn('Shared Principles', self.reg.get_definition(a2['id'])['prompt'])    # チェックしていない子には渡さない
+        self.assertNotIn('Shared Principles', self.reg.get_definition(grand['id'])['prompt'])  # 孫には渡さない
+        # 親の本文を変えると、使っている子の節が追従する
+        self.reg.set_shared(sub['id'], '- 簡潔に')
+        p = self.reg.get_definition(a1['id'])['prompt']
+        self.assertIn('- 簡潔に', p)
+        self.assertNotIn('出典を付ける', p)
+        # 外すと節が消え、元のプロンプトは残る
+        self.reg.set_use_shared(a1['id'], False)
+        self.assertNotIn('Shared Principles', self.reg.get_definition(a1['id'])['prompt'])
+        self.assertIn('あなたは', self.reg.get_definition(a1['id'])['prompt'])
+        # 付け替えで、新しい親がサブオーケストレーターでなければ節が外れる
+        self.reg.set_use_shared(a1['id'], True)
+        self.reg.update(a1['id'], {'parent_id': neko['id']})
+        self.assertNotIn('Shared Principles', self.reg.get_definition(a1['id'])['prompt'])
+        # 検査: 見出し・長さ・サブオーケストレーター以外・猫神さまの直下は不可
+        for bad in ('# 見出し', 'あ' * 4001):
+            with self.assertRaises(ValidationError):
+                self.reg.set_shared(sub['id'], bad)
+        with self.assertRaises(ValidationError):
+            self.reg.set_shared(a2['id'], 'x')
+        with self.assertRaises(ValidationError):
+            self.reg.set_use_shared(a1['id'], True)
+        # 名前の変更でフォルダが付いてくる
+        self.reg.update(sub['id'], {'name': 'sh-sub2'})
+        self.assertEqual(self.reg.get_shared(sub['id'])['text'], '- 簡潔に')
+
     def test_suborchestrator_personality(self):
         """サブオーケストレーターの性格・口調は、定義の本文の「性格・話し方」の節に書く（ADR 0044）"""
         self.reg.sync_builtin('http://x')

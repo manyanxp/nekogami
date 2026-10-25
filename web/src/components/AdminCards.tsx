@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { DANGEROUS_TOOLS, DIR_PERMS, PY_TYPES, RISKY_DIR_PERMS, modelOptions } from '@/lib/graph-model';
 import { KIND_LABEL } from '@/lib/model';
 import { DEFAULT_THEME, PRESETS, applyTheme, saveThemeCache } from '@/lib/theme';
-import type { DelegationRow, DirPerms, Entity, EntityDefinition, EntityPersonality, Overview, Personality, PyType, Theme, Tool } from '@/lib/types';
+import type { DelegationRow, DirPerms, Entity, EntityDefinition, EntityPersonality, Overview, SharedInfo, Personality, PyType, Theme, Tool } from '@/lib/types';
 import { useToast } from './Toast';
 import { Fold } from './Fold';
 import { IconPicker } from './IconPicker';
@@ -152,6 +152,8 @@ export function Inspector({ sel, entities, tools, guarded, reload, onRename, emb
         {entities.some((x) => x.parent_id === e.id) && <p className="hint">配下 {entities.filter((x) => x.parent_id === e.id).length} 件。削除すると配下もまとめて削除します。</p>}
         {e.description && <p className="hint">{e.description}</p>}
         {e.kind === 'suborchestrator' && e.definition?.kind === 'agent-md' && <EntityPersonalityPanel key={`p-${e.id}`} e={e} guarded={guarded} />}
+        {(e.kind === 'suborchestrator' && e.definition?.kind === 'agent-md') || entities.find((x) => x.id === e.parent_id)?.kind === 'suborchestrator'
+          ? <SharedPanel key={`s-${e.id}`} e={e} guarded={guarded} reload={reload} /> : null}
         {e.definition ? <DefinitionPanel key={e.id} e={e} guarded={guarded} /> : <p className="hint">定義ファイルのないエンティティです（Docker などで外部管理）。プロンプトとツールは台帳では編集できません。</p>}
       </>}
       {t && <><div className="row"><span className="badge">{t.kind}</span>{t.name}</div><div className="row"><b>接続数</b>{entities.filter((x) => x.tool_ids.includes(t.id)).length}</div>{t.description && <p className="hint">{t.description}</p>}
@@ -205,6 +207,39 @@ function EntityPersonalityPanel({ e, guarded }: { e: Entity; guarded: <T>(fn: ()
         <label>性格・ふるまい<textarea rows={4} maxLength={1000} value={p.traits} onChange={(ev) => set('traits', ev.target.value)} /></label>
         <button className="primary">保存</button>
       </form>
+    </details>
+  );
+}
+
+/** Shared Principles（全エージェント共通指示）。親の側: 共通プロンプトと、直下の子ごとの使う／使わない。子の側: 親のものを使うか（ADR 0047） */
+function SharedPanel({ e, guarded, reload }: { e: Entity; guarded: <T>(fn: () => Promise<T>) => Promise<T | undefined>; reload: () => Promise<void> }) {
+  const toast = useToast();
+  const [info, setInfo] = useState<SharedInfo | null>(null), [text, setText] = useState('');
+  useEffect(() => { void guarded(() => api.shared(e.id)).then((x) => { if (x) { setInfo(x); setText(x.text ?? ''); } }); }, [guarded, e.id]);
+  if (!info) return null;
+  const useShared = (id: string, name: string, use: boolean) => void guarded(async () => {
+    const r = await api.setUseShared(id, use);
+    toast(`${name} は共通プロンプトを${use ? '使う' : '使わない'}ようにしました`);
+    setInfo((p) => (id === e.id ? r : p && p.children ? { ...p, children: p.children.map((c) => (c.id === id ? { ...c, use } : c)) } : p));
+    await reload();
+  });
+  return (
+    <details className="defpanel" open={!!info.children}>
+      <summary>🧭 Shared Principles（全エージェント共通指示）</summary>
+      {info.children && <>
+        <p className="hint">ここに書いた指示を、チェックした直下の子（エージェント・子サブオーケストレーター）の定義ファイルの本文に「Shared Principles」の節として渡します。子はマージしたプロンプトで動き始めます。孫には渡りません。保存先は <code>nekogamisama/shared/{e.name}/shared-principles.md</code>（ファイルが正）。</p>
+        <textarea rows={6} maxLength={4000} value={text} onChange={(ev) => setText(ev.target.value)} placeholder="例: 回答は日本語。事実と推測を分ける。出典の URL を付ける。" />
+        <button className="primary" disabled={text.trim() === (info.text ?? '').trim()} onClick={() => void guarded(async () => { const r = await api.setShared(e.id, text); setInfo((p) => (p ? { ...p, ...r } : r)); toast(`${e.name} の共通プロンプトを保存しました`); await reload(); })}>保存</button>
+        <div className="shared-children">{info.children.length === 0 ? <p className="hint">直下の子がいません。</p> : info.children.map((c) => (
+          <label key={c.id} title={c.eligible ? '' : '定義ファイルのない担当には渡せません'}>
+            <input type="checkbox" disabled={!c.eligible} checked={c.use} onChange={(ev) => useShared(c.id, c.name, ev.target.checked)} />{c.name}（{KIND_LABEL[c.kind]}）
+          </label>))}</div></>}
+      {info.as_child && (
+        <label className="spawn-switch" title="親の共通プロンプトを、この担当のプロンプトにマージします">
+          <input type="checkbox" disabled={!info.as_child.eligible} checked={info.as_child.use} onChange={(ev) => useShared(e.id, e.name, ev.target.checked)} />
+          親 {info.as_child.parent} の共通プロンプトを使う{info.as_child.eligible ? '' : '（定義ファイルがないため使えません）'}
+          {info.as_child.parent_text ? '' : '（親にはまだ書かれていません）'}
+        </label>)}
     </details>
   );
 }

@@ -1,5 +1,5 @@
 // バックエンド API クライアント（UI ロジックを持たない）。/api/* は Next.js が FastAPI へ中継する。
-import type { ChatCommand, ChatEvent, ConsoleTarget, DockerStatus, Entity, EntityDefinition, EntityPersonality, Health, Me, Overview, Personality, Theme, Tool, UserRow } from './types';
+import type { ChatCommand, ChatEvent, ConsoleTarget, DockerStatus, Entity, EntityDefinition, EntityPersonality, Health, Me, Overview, Personality, Theme, Tool, UserRow, SharedInfo } from './types';
 import type { IconList } from './icons';
 
 export class ApiError extends Error {
@@ -55,6 +55,9 @@ export const api = {
   setPersonality: (p: Partial<Personality>) => call<Personality>('PUT', '/api/admin/personality', p),
   entityPersonality: (id: string) => call<EntityPersonality>('GET', `/api/entities/${id}/personality`),
   setEntityPersonality: (id: string, p: Partial<EntityPersonality>) => call<EntityPersonality>('PUT', `/api/entities/${id}/personality`, p),
+  shared: (id: string) => call<SharedInfo>('GET', `/api/entities/${id}/shared`),
+  setShared: (id: string, text: string) => call<SharedInfo>('PUT', `/api/entities/${id}/shared`, { text }),
+  setUseShared: (id: string, use: boolean) => call<SharedInfo>('PUT', `/api/entities/${id}/shared`, { use }),
   enablePersonality: () => call<Personality>('POST', '/api/admin/personality', {}),
   createAgent: (a: Json) => call<Entity>('POST', '/api/agents', a),
   delegationPut: (name: string, entry: Json) => call<Json>('PUT', `/api/delegation/${encodeURIComponent(name)}`, entry),
