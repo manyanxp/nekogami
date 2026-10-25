@@ -44,7 +44,11 @@ function Portal() {
     void reload(); refreshDelegation();
     const h = () => api.health().then(setHealth).catch(() => setHealth(null));
     void h(); const t = setInterval(h, 15000);
-    return () => clearInterval(t);
+    // 管理ページ（別のタブ）での変更に連動する（ADR 0048）: 画面に戻ったときと、見えている間は 20 秒ごとに、一覧と委任先を読み直す
+    const sync = () => { if (document.visibilityState === 'visible') { void reload(); refreshDelegation(); } };
+    const t2 = setInterval(sync, 20000);
+    document.addEventListener('visibilitychange', sync); window.addEventListener('focus', sync);
+    return () => { clearInterval(t); clearInterval(t2); document.removeEventListener('visibilitychange', sync); window.removeEventListener('focus', sync); };
   }, [reload, refreshDelegation]);
 
   const flow = useMemo(() => buildFlowView(delegation, items, ts.trace), [delegation, items, ts]);

@@ -1,7 +1,7 @@
 'use client';
 // Agent Console: 相手を選んで会話し、フロー図とトレース（フック）を見る。Console サーバー（Node, :4317）の SSE と API を使う。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { applyTheme } from '@/lib/theme';
+import { loadTheme } from '@/lib/theme';
 import { MAX_TIMELINE, buildConsoleFlow, catPattern, fmtDur, handleTrace, modelClass, modelLabel, newStore, type ConsoleStore, type TargetInfo, type TraceInput } from '@/lib/console-model';
 import { Markdown } from './Markdown';
 
@@ -82,7 +82,7 @@ export default function ConsoleApp() {
   }, []);
 
   useEffect(() => {
-    fetch('/api/theme').then((r) => r.json()).then((t) => applyTheme(t)).catch(() => {});
+    void loadTheme(() => fetch('/api/theme').then((r) => r.json()));   // 管理ページのテーマ。控えを先に当てて、ちらつきを防ぐ
     const loadIds = () => getJson<Record<string, string>>('ids').then((d) => setIds(d || {})).catch(() => {});
     const es = new EventSource('/api/console-events');
     es.onopen = () => setConn(true); es.onerror = () => setConn(false);

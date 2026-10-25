@@ -304,6 +304,25 @@ class RegistryTest(Base):
         self.assertEqual([p['name'] for p in got['params']], ['a'])
         self.assertIn('def main(a: float):', got['source'])
 
+    def test_stale_delegation_is_hidden_and_pruned(self):
+        """管理ページで消して定義ファイルがなくなった委任先は、一覧から外れる。別名の項目（news-sub → news-agent）も（ADR 0048）"""
+        self.reg.sync_builtin('http://x')
+        f = self.root / 'nekogamisama' / 'suborchestrators.json'
+        f.parent.mkdir(exist_ok=True)
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        ag = self.reg.create_claude({'kind': 'agent', 'name': 'st-agent', 'parent_id': neko['id']})
+        f.write_text(json.dumps({'st-alias': {'type': 'agent', 'agent': 'st-agent', 'description': 'x'},
+                                 'st-ghost': {'type': 'agent', 'agent': 'st-never', 'description': 'y'},
+                                 'st-local': {'type': 'session', 'dir': 'st-local', 'description': 'z'}}))
+        names = [r['name'] for r in self.reg.admin_overview()['delegation']]
+        self.assertIn('st-alias', names)
+        self.assertNotIn('st-ghost', names)          # 呼び先の定義がない項目は、画面に出さない
+        self.assertIn('st-local', names)             # session 型は触らない
+        self.assertEqual(self.reg.prune_delegation(), ['st-ghost'])
+        self.assertEqual(sorted(json.loads(f.read_text())), ['st-alias', 'st-local'])
+        self.reg.delete(ag['id'])                    # 呼び先を消すと、別名の項目も外れる
+        self.assertEqual(sorted(json.loads(f.read_text())), ['st-local'])
+
     def test_shared_principles(self):
         """サブオーケストレーターの Shared Principles。使う子の定義へ、直下の子だけ自動生成する（ADR 0047）"""
         self.reg.sync_builtin('http://x')

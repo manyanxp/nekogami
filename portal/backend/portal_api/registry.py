@@ -235,6 +235,7 @@ class Registry:
         self._load()
         self.sync_personas()   # 手で編集した personality.md を、定義の節へ反映する（ADR 0046）
         self.sync_shared()     # 親の Shared Principles を、使う子の定義へ反映する（ADR 0047）
+        self.prune_delegation()  # 定義ファイルが消えた委任先を、一覧から外す（ADR 0048）
 
     # ---- 永続化 ----
     def _load(self):
@@ -490,6 +491,7 @@ class Registry:
                     self._delegate_entry(e['name'], remove=True)   # 定義ファイルごと消えるものだけ。台帳だけを外すときは委任設定を残す
             self._save()
             self.sync_shared()   # 親を消した子の節を外す
+            self.prune_delegation()   # 呼び先の定義が消えた委任先（名前が違う news-sub など）も外す
             return ids
 
     # ---- ツール（ノードグラフでエージェントに接続する対象）----
@@ -1069,6 +1071,34 @@ class Registry:
             data[name] = {'type': 'agent', 'agent': name, 'description': description}
         self._delegate_write(data)
 
+    def _stale_delegates(self, data=None):
+        """委任先一覧（type=agent）のうち、呼び先の定義ファイルがもう無いものの名前。
+        `.claude/agents/` が空・無いとき（マウント失敗など）は、全部が消えたと誤判定しないよう、何も返さない"""
+        try:
+            data = data if data is not None else self._delegate_read()
+        except ValidationError:
+            return []
+        names = {a['name'] for a in self.defs.scan()}
+        if not names:
+            return []
+        return [n for n, v in data.items() if isinstance(v, dict) and v.get('type') == 'agent' and (v.get('agent') or n) not in names]
+
+    def prune_delegation(self):
+        """管理ページで消した（定義ファイルがなくなった）サブオーケストレーターが、委任先一覧に残らないようにする。session 型は触らない"""
+        with self._lock:
+            if not self.delegate_file.parent.is_dir():
+                return []
+            try:
+                data = self._delegate_read()
+            except ValidationError:
+                return []
+            stale = self._stale_delegates(data)
+            for n in stale:
+                del data[n]
+            if stale:
+                self._delegate_write(data)
+            return stale
+
     def _delegate_rename(self, old, new):
         try:
             data = self._delegate_read()
@@ -1106,6 +1136,8 @@ class Registry:
             wired = json.loads(Path(delegate_file or self.delegate_file).read_text(encoding='utf-8'))
         except (OSError, ValueError):
             wired = {}
+        for n in self._stale_delegates(wired):   # 定義ファイルが消えた委任先は、画面に出さない
+            wired.pop(n, None)
         delegation = [{'name': n, 'registered': n in subs, 'wired': n in wired, 'type': (wired.get(n) or {}).get('type', 'session'),
                        'dir': (wired.get(n) or {}).get('dir'), 'agent': (wired.get(n) or {}).get('agent'),
                        'description': (wired.get(n) or {}).get('description', ''), 'entity_id': subs.get(n, {}).get('id'),

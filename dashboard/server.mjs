@@ -4,6 +4,7 @@
 //  - POST /api/chat   : Claude Agent SDK でエージェントに話しかける
 //  - POST /api/stop   : 実行中の応答を中断
 //  - POST /api/reset  : 新しい会話を開始
+import { NEKO_TARGET, checkNekoTool } from './neko-policy.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -164,7 +165,10 @@ async function canUseTool(toolName, input, target, user, opts) {
   let allowed = false;
   let reason = '';
   let updated = input;
-  if (SAFE_TOOLS.has(toolName) || toolName.startsWith('mcp__microsoft-learn__')) {
+  const neko = target === NEKO_TARGET && !opts?.agentID ? checkNekoTool({ toolName, input, nekoDir: path.join(PROJECT_DIR, 'nekogamisama') }) : { ok: true };   // 猫神さま本人は、委任の道具だけ（ADR 0048）
+  if (!neko.ok) {
+    reason = neko.reason;
+  } else if (SAFE_TOOLS.has(toolName) || toolName.startsWith('mcp__microsoft-learn__')) {
     allowed = true;
   } else if (toolName.startsWith('mcp__azure__')) {
     allowed = ALLOW_AZURE_MCP;
