@@ -46,6 +46,7 @@ Azure Sage の設計判断と仕様の記録です。1 ファイル 1 判断、�
 | [0040](0040-llm-node.md) | LLM ノード（ローカル LLM を、担当へつなぐツールにする） | Accepted |
 | [0041](0041-python-node.md) | Python ノードと入力ノード（関数を引数つきで呼ぶ。入力ノードは既定値） | Accepted |
 | [0042](0042-nested-suborchestrators.md) | サブオーケストレーターの入れ子（ツリー構成。4 階層まで） | Accepted |
+| [0043](0043-agent-calls-and-auto-spawn.md) | 担当を呼ぶ接続と、担当の自動作成（読み取り専用・3 体まで） | Accepted |
 
 ## 運用ルール
 

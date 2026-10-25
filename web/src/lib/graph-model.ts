@@ -45,7 +45,10 @@ const COL = 270;
 const ROW = 84;
 
 export interface GraphNode { id: string; type: 'entity' | 'tool'; kind: string; label: string; sub: string; protected: boolean; icon?: string | null; x: number; y: number }
-export interface GraphEdge { id: string; type: 'tree' | 'tool' | 'input'; from: string; to: string }
+export interface GraphEdge { id: string; type: 'tree' | 'tool' | 'input' | 'call'; from: string; to: string }
+/** 担当 → 担当（呼ぶ）のワイヤーに使うピン。親子（左右のピン）とは別に、上下のピンでつなぐ */
+export const CALL_OUT = 'call';
+export const CALL_IN = 'callee';
 
 /** 配置（pos）が無いノードを、親子の深さ × 並び順で自動配置する。ツールは右端の列に並べる。 */
 export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
@@ -79,6 +82,7 @@ export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNod
     if (e.parent_id && known.has(e.parent_id)) edges.push({ id: `tree:${e.parent_id}>${e.id}`, type: 'tree', from: e.parent_id, to: e.id });
     for (const tid of e.tool_ids || []) if (known.has(tid)) edges.push({ id: `tool:${e.id}>${tid}`, type: 'tool', from: e.id, to: tid });
   }
+  for (const e of entities) for (const cid of e.callee_ids || []) if (known.has(cid)) edges.push({ id: `call:${e.id}>${cid}`, type: 'call', from: e.id, to: cid });
   for (const t of tools) for (const iid of t.input_ids || []) if (known.has(iid)) edges.push({ id: `input:${iid}>${t.id}`, type: 'input', from: iid, to: t.id });
   return { nodes, edges };
 }
@@ -91,10 +95,24 @@ export function isDescendant(entities: Entity[], ancestorId: string, id: string)
   return false;
 }
 
-export type Connect = { ok: false; reason: string } | { ok: true; action: 'reparent'; from: Entity; to: Entity } | { ok: true; action: 'tool'; from: Entity; to: Tool } | { ok: true; action: 'input'; from: Tool; to: Tool };
+export type Connect = { ok: false; reason: string } | { ok: true; action: 'call'; from: Entity; to: Entity } | { ok: true; action: 'reparent'; from: Entity; to: Entity } | { ok: true; action: 'tool'; from: Entity; to: Tool } | { ok: true; action: 'input'; from: Tool; to: Tool };
 
 /** 出力ピン(from) → 入力ピン(to) の接続可否。ok なら action は 'reparent'（親子）か 'tool'（ツール接続）。 */
-export function canConnect(entities: Entity[], tools: Tool[], fromId: string, toId: string): Connect {
+export function canConnect(entities: Entity[], tools: Tool[], fromId: string, toId: string, handles?: { source?: string | null; target?: string | null }): Connect {
+  const callPin = handles?.source === CALL_OUT || handles?.target === CALL_IN;
+  if (callPin) {   // 上下のピン: 担当が別の担当を呼ぶ（ADR 0043）
+    if (handles?.source !== CALL_OUT || handles?.target !== CALL_IN) return { ok: false, reason: '呼ぶ接続は、下のピン（呼ぶ側）から上のピン（呼ばれる側）へつなぐ' };
+    const caller = entities.find((e) => e.id === fromId), callee = entities.find((e) => e.id === toId);
+    if (!caller || !callee) return { ok: false, reason: '接続先が見つからない' };
+    if (caller.id === callee.id) return { ok: false, reason: '自分自身は呼べない' };
+    if (caller.kind === 'orchestrator' || callee.kind === 'orchestrator') return { ok: false, reason: '猫神さまは、この接続では使えない（委任先一覧で管理する）' };
+    if (caller.definition?.kind !== 'agent-md') return { ok: false, reason: `${caller.name} は定義ファイルがないので、担当を呼べない` };
+    if ((caller.callee_ids || []).includes(callee.id)) return { ok: false, reason: 'すでに接続されている' };
+    const reach = new Set<string>(), stack = [callee.id];   // 呼び先をたどって caller に戻るなら、輪になる
+    while (stack.length) { const n = stack.pop()!; if (!reach.has(n)) { reach.add(n); stack.push(...(entities.find((e) => e.id === n)?.callee_ids || [])); } }
+    if (reach.has(caller.id)) return { ok: false, reason: '呼び合いの輪になるので、つなげない' };
+    return { ok: true, action: 'call', from: caller, to: callee };
+  }
   const fromTool = tools.find((t) => t.id === fromId);
   if (fromTool?.kind === 'input') {   // 入力ノード → Python ノード（引数の既定値になる）
     const py = tools.find((t) => t.id === toId);

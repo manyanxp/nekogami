@@ -269,6 +269,41 @@ class RegistryTest(Base):
         self.reg.delete_tool(node['id'])
         self.assertNotIn('llm-local-qwen', self._agent_text('.claude/agents/x.md'))
 
+    def test_callees_and_auto_spawn(self):
+        """担当 → 担当の「呼ぶ」接続と、担当の自動作成のスイッチ（ADR 0043）。どちらも定義ファイルの tools に反映される"""
+        self.reg.sync_builtin('http://x')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text('{}')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        sub = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sp-sub', 'parent_id': neko['id']})
+        ag = self.reg.create_claude({'kind': 'agent', 'name': 'sp-ag', 'parent_id': neko['id']})
+        tools_of = lambda eid: self.reg.get_definition(eid)['tools']
+        # 自動作成のスイッチ: サブオーケストレーターだけ。入れると tools に入り、切ると消える
+        with self.assertRaises(ValidationError):
+            self.reg.update(ag['id'], {'auto_spawn': True})
+        self.reg.update(sub['id'], {'auto_spawn': True})
+        self.assertIn('mcp__neko-spawn__*', tools_of(sub['id']))
+        self.assertTrue(self.reg.get(sub['id'])['auto_spawn'])
+        self.reg.update(sub['id'], {'auto_spawn': False})
+        self.assertNotIn('mcp__neko-spawn__*', tools_of(sub['id']))
+        # 担当を呼ぶ接続: 呼ぶ側に Agent ツールが入る（読み取り専用の担当でも）。自分自身・猫神さま・輪は拒否
+        self.assertNotIn('Agent', tools_of(ag['id']))
+        self.reg.update(ag['id'], {'callee_ids': [sub['id']]})
+        self.assertIn('Agent', tools_of(ag['id']))
+        self.assertEqual(self.reg.get(ag['id'])['callee_ids'], [sub['id']])
+        for bad in ([ag['id']], [neko['id']], ['no-such']):
+            with self.assertRaises(ValidationError):
+                self.reg.update(ag['id'], {'callee_ids': bad})
+        with self.assertRaises(ValidationError):
+            self.reg.update(sub['id'], {'callee_ids': [ag['id']]})          # ag → sub → ag の輪
+        # 定義ファイルのない担当には使えない
+        bare = self.reg.create({'kind': 'agent', 'name': 'bare-ag', 'parent_id': neko['id']})
+        with self.assertRaises(ValidationError):
+            self.reg.update(bare['id'], {'callee_ids': [sub['id']]})
+        # 呼ばれる側を消すと、接続も外れる
+        self.reg.delete(sub['id'])
+        self.assertEqual(self.reg.get(ag['id'])['callee_ids'], [])
+
     def test_nested_suborchestrators(self):
         """サブオーケストレーターの入れ子（ADR 0042）: 置き場所、委任先、深さ、循環、条件"""
         self.reg.sync_builtin('http://x')

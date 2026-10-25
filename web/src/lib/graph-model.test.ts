@@ -118,3 +118,27 @@ describe('サブオーケストレーターの入れ子', () => {
     expect(parentChoices(more, 'agent').map((e) => e.id)).not.toContain('d');   // d の下は 5 階層目
   });
 });
+
+describe('担当 → 担当（呼ぶ）の接続', () => {
+  const def = { kind: 'agent-md', path: 'x' } as Entity['definition'];
+  const A = (id: string, callee_ids: string[] = [], definition: Entity['definition'] = def): Entity => ({ ...E(id, 'agent', id, 'o'), definition, callee_ids });
+  const pins = { source: 'call', target: 'callee' };
+  it('下のピン → 上のピンでつなげる。ピンの向きが違えば断る', () => {
+    const es = [E('o', 'orchestrator', 'neko'), A('a'), A('b')];
+    expect(canConnect(es, [], 'a', 'b', pins)).toMatchObject({ ok: true, action: 'call' });
+    expect(canConnect(es, [], 'a', 'b', { source: 'call', target: null }).ok).toBe(false);
+    expect(canConnect(es, [], 'a', 'b', { source: null, target: 'callee' }).ok).toBe(false);
+  });
+  it('自分自身・猫神さま・定義のない担当・重複・輪は断る', () => {
+    const es = [E('o', 'orchestrator', 'neko'), A('a', ['b']), A('b'), A('bare', [], null)];
+    expect(canConnect(es, [], 'a', 'a', pins).ok).toBe(false);
+    expect(canConnect(es, [], 'a', 'o', pins).ok).toBe(false);
+    expect(canConnect(es, [], 'bare', 'a', pins).ok).toBe(false);
+    expect(canConnect(es, [], 'a', 'b', pins).ok).toBe(false);          // すでに
+    expect(canConnect(es, [], 'b', 'a', pins).ok).toBe(false);          // a → b → a の輪
+  });
+  it('グラフに「呼ぶ」の線が出る', () => {
+    const g = buildGraph([E('o', 'orchestrator', 'neko'), A('a', ['b']), A('b')], []);
+    expect(g.edges).toContainEqual({ id: 'call:a>b', type: 'call', from: 'a', to: 'b' });
+  });
+});

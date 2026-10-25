@@ -48,6 +48,7 @@ services:
       - CHAT_PROJECT_DIR
       - CHAT_TARGET   # 既定の相手（猫神さまの委任先一覧にある名前）
       - NYA_SUFFIX
+      - SPAWN_MODEL   # 自動作成された一時の担当のモデル。既定は haiku（ADR 0043）
       - CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4   # サブオーケストレーターの入れ子の深さ（ADR 0042）。ポータルの上限（MAX_DEPTH）と同じ
       - OLLAMA_URL   # LLM ノード（ADR 0040）が呼ぶ先。既定は http://ollama:11434（local-llm プロファイル）
       # Azure MCP を使う場合（Reader 権限のサービスプリンシパル推奨）

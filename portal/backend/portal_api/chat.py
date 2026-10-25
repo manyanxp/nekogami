@@ -94,6 +94,8 @@ def trace_event(ev):
            'message': _clip(ev.get('message'), 400), 'prompt': _clip(ev.get('prompt'), 300)}
     if ev.get('replay'):
         out['replay'] = True
+    if ev.get('auto'):
+        out['auto'] = True            # 自動作成された一時の担当の動き（ADR 0043）
     if name == 'PreToolUse':
         try:
             inp = json.loads(ev.get('input') or '{}')

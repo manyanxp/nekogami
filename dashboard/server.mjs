@@ -17,6 +17,7 @@ import { readTheme } from './theme.mjs';
 import { z } from 'zod';
 import { DIR_PREFIX, buildDirServers, checkDirAccess, loadDirNodes } from './fs-tools.mjs';
 import { runPython } from './py-exec.mjs';
+import { SPAWN_SERVER, buildSpawnServer, checkSpawnAccess } from './spawn-agent.mjs';
 import { PY_PREFIX, buildPyServers, checkPyAccess, loadPyNodes } from './py-tools.mjs';
 import { LLM_PREFIX, buildLlmServers, checkLlmAccess, loadLlmNodes } from './llm-tools.mjs';
 
@@ -29,6 +30,7 @@ const HOST = process.env.TRACE_HOST || '127.0.0.1';
 // ディレクトリのノード（ADR 0037）が指す作業領域。ノードの path は、ここからの相対パス
 const FS_ROOT = path.resolve(process.env.FS_ROOT || path.join(PROJECT_DIR, 'workspace'));
 // LLM ノード（ADR 0040）が呼ぶローカル LLM（Ollama）。compose の `local-llm` プロファイルで起動する
+const SPAWN_MODEL = process.env.SPAWN_MODEL || 'haiku';   // 自動作成の担当のモデル（軽量。ADR 0043）
 const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://ollama:11434').replace(/\/+$/, '');
 // Python の実行（ADR 0038）のジョブ置き場。実行役（py-sandbox）と共有する
 const JOBS_DIR = path.resolve(process.env.SANDBOX_JOBS || path.join(PROJECT_DIR, 'sandbox', 'jobs'));
@@ -161,6 +163,7 @@ const WRITABLE_DIRS = ['reports', 'research'].map((d) => path.join(PROJECT_DIR, 
 async function canUseTool(toolName, input, target, user, opts) {
   let allowed = false;
   let reason = '';
+  let updated = input;
   if (SAFE_TOOLS.has(toolName) || toolName.startsWith('mcp__microsoft-learn__')) {
     allowed = true;
   } else if (toolName.startsWith('mcp__azure__')) {
@@ -176,6 +179,13 @@ async function canUseTool(toolName, input, target, user, opts) {
         : checkLlmAccess({ toolName, nodes: loadLlmNodes(REGISTRY_FILE), callerName, callerTools });
     allowed = r.ok;
     reason = r.reason || '';
+  } else if (toolName.startsWith(`mcp__${SPAWN_SERVER}__`)) {   // 担当の自動作成（ADR 0043）。呼んだ担当と、その担当のツールを入力へ書き込む（モデルが指定した値は上書き）
+    const callerName = opts?.agentID ? agentTypeById.get(opts.agentID) : chatTargets().get(target)?.agent;
+    const callerTools = loadAgentTools()[callerName];
+    const r = checkSpawnAccess({ toolName, callerName, callerTools });
+    allowed = r.ok;
+    reason = r.reason || '';
+    if (allowed) updated = { ...input, _caller: callerName, _caller_tools: callerTools ?? null };
   } else if (toolName === 'Write' || toolName === 'Edit') {
     const p = path.resolve(PROJECT_DIR, String(input?.file_path || ''));
     allowed = WRITABLE_DIRS.some((d) => p.startsWith(d));
@@ -187,7 +197,7 @@ async function canUseTool(toolName, input, target, user, opts) {
     reason = `${toolName} はチャットモードでは許可されていません`;
   }
   send({ kind: 'permission', toolName, allowed, reason, chat: target, user });
-  return allowed ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: reason };
+  return allowed ? { behavior: 'allow', updatedInput: updated } : { behavior: 'deny', message: reason };
 }
 
 function handleSdkMessage(m, target, user) {
@@ -256,6 +266,10 @@ async function runChat(text, target, user) {
           ...buildDirServers({ sdk, z, nodes: loadDirNodes(REGISTRY_FILE), root: FS_ROOT, run: (box, code) => runPython({ box, code, jobsDir: JOBS_DIR }) }),
           ...buildLlmServers({ sdk, z, nodes: loadLlmNodes(REGISTRY_FILE), baseUrl: OLLAMA_URL }),
           ...buildPyServers({ sdk, z, nodes: loadPyNodes(REGISTRY_FILE), run: (code) => runPython({ code, jobsDir: JOBS_DIR }) }),
+          ...buildSpawnServer({   // 1 回の依頼ごとに作り直す（作成数の数え直し）。動きはフックと同じ形でトレースに出す
+            sdk, z, query: sdk.query, signal: ac.signal, cwd: chatTargets().get(target).cwd, model: SPAWN_MODEL,
+            emit: (e) => send({ kind: 'hook', sessionId: sessionIds[key], chat: target, chatUser: user, ...e }),
+          }),
         },
         canUseTool: (n, i, o) => canUseTool(n, i, target, user, o),
       },

@@ -324,6 +324,11 @@ button .ico:only-child, .iconbtn .ico { margin-right: 0; }
 .perm-row label.risky { color: var(--warn); }
 .lg.dir { background: #4cc9d6; }
 
+/* 担当 → 担当の「呼ぶ」ワイヤー（上下のピン。ADR 0043） */
+#graph .edge.call path.react-flow__edge-path { stroke: #e07a5f; }
+.gnode .port.call { border-color: #e07a5f; }
+.spawn-switch { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0; cursor: pointer; }
+
 /* Python ノードと入力ノード（ADR 0041） */
 .gnode.py .head { background: #f2b84c; }
 .gnode.input .head { background: #8bc96a; }

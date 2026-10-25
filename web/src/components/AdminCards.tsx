@@ -141,6 +141,13 @@ export function Inspector({ sel, entities, tools, guarded, reload, onRename, emb
         <div className="row"><b>モデル</b><ModelSelect value={e.model} title="モデルを変更（台帳に保存）" onChange={(v) => void guarded(async () => { await api.update(e.id, { model: v }); toast(`${e.name} のモデルを ${v || '（指定なし）'} にしました${e.definition ? '（定義ファイルを更新）' : ''}`); await reload(); })} /></div>
         <div className="row"><b>親</b>{entities.find((x) => x.id === e.parent_id)?.name || '（なし）'}</div>
         <div className="row"><b>ツール</b>{e.tool_ids.map((i) => tools.find((x) => x.id === i)?.name).filter(Boolean).join(', ') || '（なし）'}</div>
+        <div className="row"><b>呼べる担当</b>{(e.callee_ids || []).map((i) => entities.find((x) => x.id === i)?.name).filter(Boolean).join(', ') || '（なし）'}</div>
+        {e.kind === 'suborchestrator' && e.definition?.kind === 'agent-md' && (
+          <label className="spawn-switch" title="配下だけでは足りないとき、読み取り専用の一時担当をその場で作って使い、終われば消します。動きはトレースとターミナルに「自動作成/…」と出ます">
+            <input type="checkbox" checked={!!e.auto_spawn} onChange={(ev) => void guarded(async () => { await api.update(e.id, { auto_spawn: ev.target.checked }); toast(`${e.name} の担当の自動作成を${ev.target.checked ? '許可' : '禁止'}にしました（定義ファイルを更新）`); await reload(); })} />
+            足りないとき、担当を自動で作ってよい（読み取りのみ・1 回の依頼で 3 体まで）
+          </label>
+        )}
         {entities.some((x) => x.parent_id === e.id) && <p className="hint">配下 {entities.filter((x) => x.parent_id === e.id).length} 件。削除すると配下もまとめて削除します。</p>}
         {e.description && <p className="hint">{e.description}</p>}
         {e.definition ? <DefinitionPanel key={e.id} e={e} guarded={guarded} /> : <p className="hint">定義ファイルのないエンティティです（Docker などで外部管理）。プロンプトとツールは台帳では編集できません。</p>}

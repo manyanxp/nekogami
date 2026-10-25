@@ -64,6 +64,11 @@ function Admin() {
     const { entities: ents, tools: tls, sel: s } = live.current;
     if (!s) return;
     if (s.type === 'edge') {
+      if (s.id.startsWith('call:')) {   // 担当 → 担当（呼ぶ）
+        const [from, to] = s.id.split(':')[1].split('>'); const caller = ents.find((x) => x.id === from)!;
+        await guarded(async () => { await api.update(from, { callee_ids: (caller.callee_ids || []).filter((i) => i !== to) }); toast('呼ぶ接続を外しました'); await reload(); });
+        return;
+      }
       if (s.id.startsWith('input:')) {   // 入力ノード → Python ノード
         const [from, to] = s.id.split(':')[1].split('>'); const py = tls.find((x) => x.id === to)!;
         await guarded(async () => { await api.updateTool(to, { input_ids: (py.input_ids || []).filter((i) => i !== from) }); toast('入力を外しました'); await reload(); });
@@ -94,10 +99,13 @@ function Admin() {
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, [deleteSelected]);
 
-  const onConnect = useCallback((fromId: string, toId: string) => void guarded(async () => {
-    const r = canConnect(entities, tools, fromId, toId);
+  const onConnect = useCallback((fromId: string, toId: string, handles?: { source?: string | null; target?: string | null }) => void guarded(async () => {
+    const r = canConnect(entities, tools, fromId, toId, handles);
     if (!r.ok) return toast(r.reason, true);
-    if (r.action === 'input') {
+    if (r.action === 'call') {
+      await api.update(fromId, { callee_ids: [...(r.from.callee_ids || []), toId] });
+      toast(`${r.from.name} が ${r.to.name} を呼べるようにしました（定義ファイルの tools に Agent を足しました）`);
+    } else if (r.action === 'input') {
       await api.updateTool(toId, { input_ids: [...(r.to.input_ids || []), fromId] });
       toast(`${r.to.name} に入力 ${r.from.name}（${r.from.param}）をつなぎました`);
     } else if (r.action === 'tool') {
@@ -139,7 +147,7 @@ function Admin() {
       items.unshift(['✎ 編集…', () => setEditId(e.id)], ['🖼 アイコンを変更…', () => setEditId(e.id)], '---');
       items.push([e.protected ? '🔒 削除できません（管理者エージェント）' : '削除…', () => void deleteSelected(), { danger: !e.protected, disabled: e.protected }]);
     } else if (t) { add('tool'); items.push('---', ['ツールを削除…', () => void deleteSelected(), { danger: true }]); }
-    else if (c.target.type === 'edge') { const isTool = c.target.id!.startsWith('tool:'); items.push([isTool ? '接続を外す' : '親子のワイヤーは削除できません', () => void deleteSelected(), { disabled: !isTool }]); }
+    else if (c.target.type === 'edge') { const isTool = /^(tool|input|call):/.test(c.target.id!); items.push([isTool ? '接続を外す' : '親子のワイヤーは削除できません', () => void deleteSelected(), { disabled: !isTool }]); }
     setMenu({ x: Math.min(c.clientX, window.innerWidth - 240), y: Math.min(c.clientY, window.innerHeight - 40 * (items.length + 1)), items });
   }, [deleteSelected, rename]);
 
@@ -150,7 +158,7 @@ function Admin() {
     return () => window.removeEventListener('pointerdown', close, true);
   }, [menu]);
 
-  const selDeletable = !!sel && (sel.type === 'edge' ? sel.id.startsWith('tool:') || sel.id.startsWith('input:') : !entities.find((e) => e.id === sel.id)?.protected);
+  const selDeletable = !!sel && (sel.type === 'edge' ? /^(tool|input|call):/.test(sel.id) : !entities.find((e) => e.id === sel.id)?.protected);
   const resetLayout = () => void guarded(async () => {
     if (!window.confirm('手動で並べた配置を破棄して、自動配置に戻しますか？')) return;
     await Promise.all([...entities.filter((e) => e.pos).map((e) => api.update(e.id, { pos: null })), ...tools.filter((t) => t.pos).map((t) => api.updateTool(t.id, { pos: null }))]);

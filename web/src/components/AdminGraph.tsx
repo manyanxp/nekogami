@@ -3,7 +3,7 @@
 import { Background, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider, applyNodeChanges, useReactFlow, type Edge, type Node, type NodeChange, type NodeProps, type OnConnect } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { buildGraph, canConnect, type GraphNode } from '@/lib/graph-model';
+import { CALL_IN, CALL_OUT, buildGraph, canConnect, type GraphNode } from '@/lib/graph-model';
 import type { Entity, Tool } from '@/lib/types';
 import { Icon } from './Icon';
 import { Avatar } from './IconPicker';
@@ -18,9 +18,11 @@ function NekoNode({ data, selected }: NodeProps<Node<NodeData>>) {
     <div className={`gnode ${data.kind}${data.isDir ? ' dir' : ''}${data.isLlm ? ' llm' : ''}${data.isPy ? ' py' : ''}${data.isInput ? ' input' : ''}${selected ? ' sel' : ''}${data.protected ? ' protected' : ''}`}>
       <div className="head" />
       {!data.protected && !(data.kind === 'orchestrator') && <Handle type="target" position={Position.Left} className="port" />}
+      {!data.isTool && data.kind !== 'orchestrator' && <Handle id={CALL_IN} type="target" position={Position.Top} className="port call" title="呼ばれる側（呼ぶ担当のワイヤーをつなぐ）" />}
       <div className="title">{!data.isTool && <Avatar icon={data.icon} kind={data.kind} size={18} />}{data.isDir && <Icon name="folder" size={16} />}{data.isLlm && <Icon name="chat" size={16} />}{data.isPy && <Icon name="code_run" size={16} />}{data.label}</div>
       <div className="subtitle">{data.sub || ' '}</div>
       {(!data.isTool || data.isInput) && <Handle type="source" position={Position.Right} className="port" />}
+      {!data.isTool && data.kind !== 'orchestrator' && <Handle id={CALL_OUT} type="source" position={Position.Bottom} className="port call" title="呼ぶ側（呼ばれる担当へワイヤーをつなぐ）" />}
     </div>
   );
 }
@@ -28,7 +30,7 @@ const nodeTypes = { neko: NekoNode };
 
 function Inner({ entities, tools, fitKey, selected, onSelect, onMove, onConnect, onContext }: {
   entities: Entity[]; tools: Tool[]; fitKey: number; selected: Sel; onSelect: (s: Sel) => void;
-  onMove: (id: string, x: number, y: number) => void; onConnect: (from: string, to: string) => void; onContext: (c: CtxTarget) => void;
+  onMove: (id: string, x: number, y: number) => void; onConnect: (from: string, to: string, handles?: { source?: string | null; target?: string | null }) => void; onContext: (c: CtxTarget) => void;
 }) {
   const rf = useReactFlow();
   const g = useMemo(() => buildGraph(entities, tools), [entities, tools]);
@@ -41,14 +43,14 @@ function Inner({ entities, tools, fitKey, selected, onSelect, onMove, onConnect,
   useEffect(() => setNodes(built), [built]);
   const onNodesChange = useCallback((changes: NodeChange<Node<NodeData>>[]) => setNodes((ns) => applyNodeChanges(changes, ns)), []);
   const edges: Edge[] = useMemo(() => g.edges.map((e) => ({
-    id: e.id, source: e.from, target: e.to, className: `edge ${e.type}`, selected: selected?.type === 'edge' && selected.id === e.id,
-    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, style: e.type === 'tool' ? { strokeDasharray: '6 4' } : e.type === 'input' ? { strokeDasharray: '2 4' } : undefined,
+    id: e.id, source: e.from, target: e.to, ...(e.type === 'call' ? { sourceHandle: CALL_OUT, targetHandle: CALL_IN } : {}), className: `edge ${e.type}`, selected: selected?.type === 'edge' && selected.id === e.id,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, style: e.type === 'tool' ? { strokeDasharray: '6 4' } : e.type === 'input' ? { strokeDasharray: '2 4' } : e.type === 'call' ? { strokeDasharray: '10 3 2 3' } : undefined,
   })), [g, selected]);
 
   useEffect(() => { const t = setTimeout(() => rf.fitView({ padding: 0.15, duration: 200 }), 50); return () => clearTimeout(t); }, [fitKey, rf]);
 
-  const isValid = useCallback((c: { source: string; target: string }) => canConnect(entities, tools, c.source, c.target).ok, [entities, tools]);
-  const connect: OnConnect = useCallback((c) => { if (c.source && c.target) onConnect(c.source, c.target); }, [onConnect]);
+  const isValid = useCallback((c: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }) => canConnect(entities, tools, c.source, c.target, { source: c.sourceHandle, target: c.targetHandle }).ok, [entities, tools]);
+  const connect: OnConnect = useCallback((c) => { if (c.source && c.target) onConnect(c.source, c.target, { source: c.sourceHandle, target: c.targetHandle }); }, [onConnect]);
   const ctx = (target: CtxTarget['target']) => (ev: React.MouseEvent | MouseEvent) => {
     ev.preventDefault();
     const p = rf.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });

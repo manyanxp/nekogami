@@ -8,6 +8,8 @@ export interface Entity {
   id: string; kind: Kind; name: string; parent_id: string | null; description: string; model: string;
   enabled: boolean; tags: string[]; runtime: Runtime; tool_ids: string[]; pos: { x: number; y: number } | null;
   protected?: boolean; definition?: Definition | null; icon?: string | null;
+  /** 呼べる担当（担当 → 担当の接続。ADR 0043）と、足りないときの一時担当の自動作成を許すか（サブオーケストレーターのみ） */
+  callee_ids?: string[]; auto_spawn?: boolean;
 }
 export type DirPerm = 'list' | 'read' | 'write' | 'delete' | 'exec';
 export type DirPerms = Record<DirPerm, boolean>;
@@ -60,4 +62,6 @@ export interface TraceEvent {
   kind: 'trace'; ts?: number; event: string; agentType?: string | null; agentId?: string | null; sessionId?: string;
   toolName?: string; toolUseId?: string; message?: string; prompt?: string; input?: string; replay?: boolean;
   route?: { to: string; via: 'agent' | 'session'; description?: string };
+  /** 足りないときに自動作成された一時の担当の動き（ADR 0043） */
+  auto?: boolean;
 }

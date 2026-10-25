@@ -23,6 +23,7 @@ PARENT_KINDS = {
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
 TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory', 'llm', 'python', 'input')
+SPAWN_ENTRY = 'mcp__neko-spawn__*'   # 担当の自動作成（Agent Console のツール。ADR 0043）。サブオーケストレーターのスイッチで tools に入る
 NODE_TOOL_KINDS = ('directory', 'llm', 'python')   # Agent Console がプロセス内の MCP サーバーとして公開するノード。定義ファイルのある担当にだけつなげる
 # LLM ノード（ローカル LLM。ADR 0040）の設定。モデル名は Ollama のもの
 LLM_MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$')
@@ -231,6 +232,8 @@ class Registry:
         self._tools = {t['id']: t for t in data.get('tools', [])}
         for e in data.get('entities', []):
             e.setdefault('tool_ids', [])
+            e.setdefault('callee_ids', [])
+            e.setdefault('auto_spawn', False)
             e.setdefault('definition', None)
             e.setdefault('pos', None)
             e.setdefault('protected', False)
@@ -351,6 +354,8 @@ class Registry:
         return {
             'icon': icon,
             'tool_ids': self._clean_tool_ids(data.get('tool_ids')),
+            'callee_ids': self._clean_callee_ids(data.get('callee_ids'), current, kind),
+            'auto_spawn': self._clean_auto_spawn(data.get('auto_spawn'), kind),
             'pos': _clean_pos(data.get('pos')),
             'kind': kind, 'name': name, 'parent_id': parent_id,
             'description': str(data.get('description') or '')[:500],
@@ -359,6 +364,40 @@ class Registry:
             'tags': tags,
             'runtime': _clean_runtime(data.get('runtime'), self.project_dir),
         }
+
+    def _clean_callee_ids(self, ids, current, kind):
+        """呼べる担当（担当 → 担当の接続。ADR 0043）。自分自身・猫神さま・呼び合いの輪（循環）は不可"""
+        ids = ids or []
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise ValidationError('callee_ids は担当の ID の配列')
+        ids = list(dict.fromkeys(ids))
+        for i in ids:
+            t = self._items.get(i)
+            if t is None:
+                raise ValidationError(f'未登録の担当: {i}')
+            if t['kind'] == 'orchestrator':
+                raise ValidationError('猫神さまは、ほかの担当から呼べない')
+            if current and i == current['id']:
+                raise ValidationError('自分自身は呼べない')
+        if current and ids and kind == 'orchestrator':
+            raise ValidationError('猫神さまの呼び先は、委任先一覧で管理する')
+        if current:
+            seen, stack = set(), list(ids)
+            while stack:   # 呼び先をたどって、自分に戻ってくるなら輪になる（無限に呼び合う）
+                n = stack.pop()
+                if n == current['id']:
+                    raise ValidationError('呼び合いの輪になるので、つなげない')
+                if n not in seen:
+                    seen.add(n)
+                    stack += (self._items.get(n) or {}).get('callee_ids', [])
+        return ids
+
+    @staticmethod
+    def _clean_auto_spawn(value, kind):
+        value = bool(value)
+        if value and kind != 'suborchestrator':
+            raise ValidationError('担当の自動作成を許せるのは、サブオーケストレーターだけ')
+        return value
 
     def _clean_tool_ids(self, ids):
         ids = ids or []
@@ -393,6 +432,9 @@ class Registry:
                 self._rename(cur, body['name'])           # 定義ファイル・配下のフォルダ・委任先一覧の名前も合わせる
                 cur = self.get(eid)
             self._check_node_connections(cur, body)
+            if (body['auto_spawn'] != cur.get('auto_spawn', False) or set(body['callee_ids']) - set(cur.get('callee_ids', []))) \
+                    and (cur.get('definition') or {}).get('kind') != 'agent-md':
+                raise ValidationError(f'{cur["name"]} は定義ファイル（.claude/agents/）がないので、担当を呼ぶ接続と自動作成のスイッチは使えない')
             definition = self._apply_definition(cur, body, allow) if cur.get('definition') else cur.get('definition')
             try:
                 self._apply_host_nodes(cur, body, allow)
@@ -421,6 +463,9 @@ class Registry:
             if any(self._items[i].get('protected') for i in ids):
                 raise Forbidden('猫神さま（管理者エージェント）は削除できない')
             for i in ids:
+                for o in self._items.values():   # 消した担当への「呼ぶ」接続も外す
+                    if i in o.get('callee_ids', []):
+                        o['callee_ids'] = [c for c in o['callee_ids'] if c != i]
                 e = self._items.pop(i, None)
                 if e and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self.defs.discard(e['definition']['path'])        # 削除ではなく trash へ移す
@@ -645,6 +690,7 @@ class Registry:
                 self._check_risky([self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools], allow_dangerous)
                 current = self.defs.read(d)['tools'] or []
                 tools = merge_tools(current, self._tool_names(body['tool_ids']), self._catalog())
+            tools = self._apply_calls(d, cur, body, tools)
             self.defs._check(body['description'], body['model'], tools)
             if body['parent_id'] != cur['parent_id']:
                 d['path'] = self.defs.move(d['path'], self._group_for(body, body['name']))
@@ -654,6 +700,24 @@ class Registry:
             return d
         except DefinitionError as e:
             raise ValidationError(str(e))
+
+    def _apply_calls(self, d, cur, body, tools):
+        """自動作成のスイッチ（mcp__neko-spawn__*）と、担当を呼ぶ接続（Agent ツール）を、定義の tools に反映する。変更がなければ tools をそのまま返す"""
+        spawn_changed = body['auto_spawn'] != cur.get('auto_spawn', False)
+        added_callee = bool(set(body['callee_ids']) - set(cur.get('callee_ids', [])))
+        if not spawn_changed and not added_callee:
+            return tools
+        base = tools if tools is not None else self.defs.read(d)['tools']
+        if base is None:        # tools の指定がない = 全ツールを継承。足さなくても使える
+            return tools
+        out = list(base)
+        if spawn_changed:
+            out = [t for t in out if t != SPAWN_ENTRY]
+            if body['auto_spawn']:
+                out.append(SPAWN_ENTRY)
+        if added_callee and not any(t.split('(')[0] == 'Agent' for t in out):
+            out.insert(0, 'Agent')   # 呼ぶには Agent ツールが要る
+        return out
 
     def _rename(self, cur, new):
         """名前の変更に伴うファイル操作。先にぶつかりを全部調べてから動かす。台帳（_items）は、定義のパスと名前だけを更新する。"""
