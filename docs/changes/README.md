@@ -49,3 +49,6 @@
 | 2026-10-25 | [Python ノードと入力ノード（rev2 の第 2 段階）](20261025-42-python-node.md) | [0041](../adr/0041-python-node.md) |
 | 2026-10-25 | [サブオーケストレーターの入れ子（rev2 の第 3 段階）](20261025-43-nested-suborchestrators.md) | [0042](../adr/0042-nested-suborchestrators.md) |
 | 2026-10-25 | [担当を呼ぶ接続と、担当の自動作成（rev2 の第 4 段階）](20261025-44-agent-calls-and-auto-spawn.md) | [0043](../adr/0043-agent-calls-and-auto-spawn.md) |
+| 2026-10-25 | [管理ページの見直しと、サブオーケストレーターの性格（rev3）](20261025-45-admin-ui-and-persona.md) | [0044](../adr/0044-admin-ui-and-subagent-persona.md) |
+| 2026-10-25 | [Python ノードを処理だけに、左の列の開閉と線の強調（rev3 更新分）](20261025-46-python-body-and-fold.md) | [0045](../adr/0045-python-node-body-only.md) |
+| 2026-10-25 | [サブオーケストレーターごとの personality.md（rev3 追加分）](20261025-47-subagent-personality-file.md) | [0046](../adr/0046-subagent-personality-file.md) |

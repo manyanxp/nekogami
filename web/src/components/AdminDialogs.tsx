@@ -34,7 +34,7 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
     try {
       if (isDir) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'directory', path: f.path.trim(), perms, pos });
       else if (isLlm) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'llm', model: f.model.trim(), prompt: f.prompt, pos });
-      else if (isPy) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'python', code: f.prompt, func: 'main', pos });
+      else if (isPy) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'python', code: f.prompt, pos });
       else if (isInput) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: 'input', param: f.param.trim(), dtype: f.dtype, value: f.value, pos });
       else if (isTool) await api.createTool({ name: f.name.trim(), description: f.description.trim(), kind: f.tool_kind, pos });
       else await api.createAgent({ kind: spec!.kind, name: f.name.trim(), description: f.description.trim(), parent_id: f.parent_id || null, model: f.model, prompt: f.prompt.trim(), pos });
@@ -60,13 +60,13 @@ export function AddDialog({ spec, entities, selectedId, onClose, onDone }: { spe
               <label>プロンプト（システムプロンプト。空でもよい）<textarea className="llm-prompt" rows={6} maxLength={8000} value={f.prompt} onChange={(e) => set('prompt', e.target.value)} placeholder="あなたは…です。短く答えます。" /></label>
               <p className="hint">作ったら、エージェントの左の ● へワイヤーでつなぐと、そのエージェントが <code>ask</code> ツールで質問できます。温度や出力の長さは、作ったあとの編集で変えられます。</p></>}
             {isPy && <>
-              <label>関数のコード（<code>def main(...)</code> を書く。引数には型注釈が要る）<textarea className="llm-prompt code" rows={10} spellCheck={false} maxLength={20000} value={f.prompt} onChange={(e) => set('prompt', e.target.value)} required /></label>
-              <p className="hint">ネットワークなし・30 秒までの実行環境で動きます。作ったら、エージェントの左の ● へワイヤーでつなぐと、そのエージェントが <code>run</code> ツールで関数を呼べます。</p></>}
+              <label>処理（関数の中身だけを書く。関数名や引数は書かない。結果は <code>return</code> で返す）<textarea className="llm-prompt code" rows={10} spellCheck={false} maxLength={20000} value={f.prompt} onChange={(e) => set('prompt', e.target.value)} required /></label>
+              <p className="hint">入力ノードをつなぐと、その引数名が変数として使え、実行時に関数が自動で作られます。ネットワークなし・30 秒までの実行環境で動き、処理が終わってから結果を呼んだ担当へ返します。作ったら、エージェントの左の ● へワイヤーでつなぐと、そのエージェントが <code>run</code> ツールで呼べます。</p></>}
             {isInput && <>
-              <label>引数名（つなぐ Python ノードの関数の引数）<input value={f.param} onChange={(e) => set('param', e.target.value)} required pattern="[A-Za-z_][A-Za-z0-9_]{0,63}" placeholder="例: x" /></label>
+              <label>引数名（つなぐと、Python ノードの関数の引数・変数になる）<input value={f.param} onChange={(e) => set('param', e.target.value)} required pattern="[A-Za-z_][A-Za-z0-9_]{0,63}" placeholder="例: x" /></label>
               <label>データ型<select value={f.dtype} onChange={(e) => set('dtype', e.target.value)}>{PY_TYPES.map((t) => <option key={t.key} value={t.key}>{t.key}</option>)}</select></label>
               <label>値（{PY_TYPES.find((t) => t.key === f.dtype)?.example}）<textarea className="llm-prompt" rows={3} maxLength={4000} value={f.value} onChange={(e) => set('value', e.target.value)} /></label>
-              <p className="hint">作ったら、Python ノードへワイヤーでつなぐと、その引数の既定値になります（担当が値を渡せば、そちらが優先）。</p></>}
+              <p className="hint">作ったら、Python ノードへワイヤーでつなぐと、Python ノードのパラメータ情報に引数として表示されます。値はその既定値になります（担当が値を渡せば、そちらが優先）。</p></>}
             {isTool && !isDir && !isLlm && !isPy && !isInput && <label>ツールの種類<select value={f.tool_kind} onChange={(e) => set('tool_kind', e.target.value)}><option value="custom">custom</option><option value="mcp">mcp</option><option value="builtin">builtin</option></select></label>}
             {!isTool && <label>モデル<ModelSelect value={f.model} onChange={(v) => set('model', v)} /></label>}
             <label>説明<input value={f.description} maxLength={300} onChange={(e) => set('description', e.target.value)} /></label>

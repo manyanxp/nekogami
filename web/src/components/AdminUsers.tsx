@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { Role, UserRow } from '@/lib/types';
+import { Fold } from './Fold';
 import { useMe } from './Gate';
 import { Icon } from './Icon';
 
@@ -20,8 +21,7 @@ export function UsersCard({ guarded }: { guarded: Guard }) {
     if (pw) run(() => api.updateUser(u.username, { password: pw }));
   };
   return (
-    <section className="card" id="usersCard">
-      <h2><Icon name="group" />ユーザー</h2>
+    <Fold id="usersCard" title={<><Icon name="group" />ユーザー</>}>
       <p className="hint">管理者は管理ページとユーザー管理が使えます。利用者はポータルの閲覧とチャットだけです。会話は人ごとに別です。</p>
       <ul className="plain">
         {items.map((u) => {
@@ -46,6 +46,6 @@ export function UsersCard({ guarded }: { guarded: Guard }) {
         <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as Role })}><option value="user">利用者</option><option value="admin">管理者</option></select>
         <button className="primary"><Icon name="add" />ユーザーを追加</button>
       </form>
-    </section>
+    </Fold>
   );
 }
