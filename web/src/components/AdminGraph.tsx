@@ -11,16 +11,16 @@ import { Avatar } from './IconPicker';
 export type Sel = { type: 'node' | 'edge'; id: string } | null;
 export interface CtxTarget { clientX: number; clientY: number; x: number; y: number; target: { type: 'node' | 'edge' | 'bg'; id?: string } }
 
-type NodeData = { label: string; sub: string; kind: string; protected: boolean; isTool: boolean; isDir: boolean; isLlm: boolean; icon: string | null };
+type NodeData = { label: string; sub: string; kind: string; protected: boolean; isTool: boolean; isDir: boolean; isLlm: boolean; isPy: boolean; isInput: boolean; icon: string | null };
 
 function NekoNode({ data, selected }: NodeProps<Node<NodeData>>) {
   return (
-    <div className={`gnode ${data.kind}${data.isDir ? ' dir' : ''}${data.isLlm ? ' llm' : ''}${selected ? ' sel' : ''}${data.protected ? ' protected' : ''}`}>
+    <div className={`gnode ${data.kind}${data.isDir ? ' dir' : ''}${data.isLlm ? ' llm' : ''}${data.isPy ? ' py' : ''}${data.isInput ? ' input' : ''}${selected ? ' sel' : ''}${data.protected ? ' protected' : ''}`}>
       <div className="head" />
       {!data.protected && !(data.kind === 'orchestrator') && <Handle type="target" position={Position.Left} className="port" />}
-      <div className="title">{!data.isTool && <Avatar icon={data.icon} kind={data.kind} size={18} />}{data.isDir && <Icon name="folder" size={16} />}{data.isLlm && <Icon name="chat" size={16} />}{data.label}</div>
+      <div className="title">{!data.isTool && <Avatar icon={data.icon} kind={data.kind} size={18} />}{data.isDir && <Icon name="folder" size={16} />}{data.isLlm && <Icon name="chat" size={16} />}{data.isPy && <Icon name="code_run" size={16} />}{data.label}</div>
       <div className="subtitle">{data.sub || ' '}</div>
-      {!data.isTool && <Handle type="source" position={Position.Right} className="port" />}
+      {(!data.isTool || data.isInput) && <Handle type="source" position={Position.Right} className="port" />}
     </div>
   );
 }
@@ -34,7 +34,7 @@ function Inner({ entities, tools, fitKey, selected, onSelect, onMove, onConnect,
   const g = useMemo(() => buildGraph(entities, tools), [entities, tools]);
   const built: Node<NodeData>[] = useMemo(() => g.nodes.map((n: GraphNode) => ({
     id: n.id, type: 'neko', position: { x: n.x, y: n.y }, selected: selected?.type === 'node' && selected.id === n.id,
-    data: { label: n.label, sub: n.sub, kind: n.type === 'tool' ? 'tool' : n.kind, protected: n.protected, isTool: n.type === 'tool', isDir: n.kind === 'directory', isLlm: n.kind === 'llm', icon: n.icon || null },
+    data: { label: n.label, sub: n.sub, kind: n.type === 'tool' ? 'tool' : n.kind, protected: n.protected, isTool: n.type === 'tool', isDir: n.kind === 'directory', isLlm: n.kind === 'llm', isPy: n.kind === 'python', isInput: n.kind === 'input', icon: n.icon || null },
   })), [g, selected]);
   // ドラッグ中の位置は、ここで持つ（制御コンポーネントは onNodesChange で位置を反映しないと動かない）。台帳が変わったら作り直す
   const [nodes, setNodes] = useState<Node<NodeData>[]>(built);
@@ -42,7 +42,7 @@ function Inner({ entities, tools, fitKey, selected, onSelect, onMove, onConnect,
   const onNodesChange = useCallback((changes: NodeChange<Node<NodeData>>[]) => setNodes((ns) => applyNodeChanges(changes, ns)), []);
   const edges: Edge[] = useMemo(() => g.edges.map((e) => ({
     id: e.id, source: e.from, target: e.to, className: `edge ${e.type}`, selected: selected?.type === 'edge' && selected.id === e.id,
-    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, style: e.type === 'tool' ? { strokeDasharray: '6 4' } : undefined,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, style: e.type === 'tool' ? { strokeDasharray: '6 4' } : e.type === 'input' ? { strokeDasharray: '2 4' } : undefined,
   })), [g, selected]);
 
   useEffect(() => { const t = setTimeout(() => rf.fitView({ padding: 0.15, duration: 200 }), 50); return () => clearTimeout(t); }, [fitKey, rf]);

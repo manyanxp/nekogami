@@ -27,6 +27,7 @@ ROLES = ('suborchestrator', 'agent', 'subagent')
 # 書き込み・実行ができるツール。新しく足すときは確認（allow_dangerous）が要る（ADR 0002 の読み取り中心の方針）
 DANGEROUS_TOOLS = ('Bash', 'Write', 'Edit', 'NotebookEdit')
 LLM_PREFIX = 'llm-'   # LLM ノード（ローカル LLM）は、Agent Console が MCP サーバー `llm-<名前>` として公開する（ADR 0040）
+PY_PREFIX = 'py-'   # Python ノードは、Agent Console が MCP サーバー `py-<名前>` として公開する（ADR 0041）
 DIR_PREFIX = 'dir-'   # ディレクトリのノードは、Agent Console が MCP サーバー `dir-<名前>` として公開する（ADR 0037）
 MAX_PROMPT = 50_000
 KEY_RE = re.compile(r'^([A-Za-z][A-Za-z0-9_]*):[ \t]*(.*)$')
@@ -137,6 +138,8 @@ def entry_node(entry):
             return server[len(DIR_PREFIX):]   # ディレクトリのノード（`mcp__dir-<名前>__*`）。ノード名は <名前>
         if server.startswith(LLM_PREFIX) and len(server) > len(LLM_PREFIX):
             return server[len(LLM_PREFIX):]   # LLM ノード（`mcp__llm-<名前>__*`）
+        if server.startswith(PY_PREFIX) and len(server) > len(PY_PREFIX):
+            return server[len(PY_PREFIX):]   # Python ノード（`mcp__py-<名前>__*`）
         return server or None
     return base
 
@@ -146,6 +149,8 @@ def node_entry(name, kind):
         return f'mcp__{DIR_PREFIX}{name}__*'
     if kind == 'llm':
         return f'mcp__{LLM_PREFIX}{name}__*'
+    if kind == 'python':
+        return f'mcp__{PY_PREFIX}{name}__*'
     return f'mcp__{name}__*' if kind == 'mcp' else name
 
 

@@ -70,3 +70,28 @@ describe('ディレクトリのノード', () => {
     expect(canConnect([a], [dir({})], 'a1', 'd1')).toMatchObject({ ok: true, action: 'tool' });
   });
 });
+
+describe('Python ノードと入力ノード', () => {
+  const py = (input_ids: string[] = []): Tool => ({ id: 'p1', name: 'calc', kind: 'python', pos: null, func: 'main', input_ids,
+    params: [{ name: 'n', type: 'int', required: true, default: null }, { name: 's', type: 'str', required: false, default: 'a' }] });
+  const inp = (id: string, param: string, dtype: Tool['dtype']): Tool => ({ id, name: `in-${id}`, kind: 'input', pos: null, param, dtype, value: '1' });
+  it('担当につなげる。入力ノードは担当にはつなげず、Python ノードにだけつなげる', () => {
+    const a = E('a1', 'agent', 'ag', 'o1');
+    expect(canConnect([a], [py()], 'a1', 'p1')).toMatchObject({ ok: true, action: 'tool' });
+    expect(canConnect([a], [py(), inp('i1', 'n', 'int')], 'a1', 'i1').ok).toBe(false);
+    expect(canConnect([a], [py(), inp('i1', 'n', 'int')], 'i1', 'p1')).toMatchObject({ ok: true, action: 'input' });
+    expect(canConnect([a], [py(), inp('i1', 'n', 'int')], 'i1', 'a1').ok).toBe(false);
+  });
+  it('引数名・型が合わない、同じ引数に 2 つ、は断る', () => {
+    const e: Entity[] = [];
+    expect(canConnect(e, [py(), inp('i1', 'zz', 'int')], 'i1', 'p1').ok).toBe(false);
+    expect(canConnect(e, [py(), inp('i1', 'n', 'str')], 'i1', 'p1').ok).toBe(false);
+    expect(canConnect(e, [py(['i1']), inp('i1', 'n', 'int'), inp('i2', 'n', 'int')], 'i2', 'p1').ok).toBe(false);
+  });
+  it('グラフ: 表示と、入力 → Python の線', () => {
+    const g = buildGraph([], [py(['i1']), inp('i1', 'n', 'int')]);
+    expect(g.nodes.find((n) => n.id === 'p1')!.sub).toBe('Python · main(n, s)');
+    expect(g.nodes.find((n) => n.id === 'i1')!.sub).toBe('入力 · n: int');
+    expect(g.edges).toContainEqual({ id: 'input:i1>p1', type: 'input', from: 'i1', to: 'p1' });
+  });
+});

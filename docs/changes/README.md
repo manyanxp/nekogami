@@ -46,3 +46,4 @@
 | 2026-10-25 | [Python の生成・実行（rev1 の第 3 段階）](20261025-39-python-sandbox.md) | [0038](../adr/0038-python-execution-sandbox.md) |
 | 2026-10-25 | [ローカル LLM の担当（rev1 の第 4 段階）](20261025-40-local-llm.md) | [0039](../adr/0039-local-llm-agent.md) |
 | 2026-10-25 | [LLM ノード（rev2 の第 1 段階）](20261025-41-llm-node.md) | [0040](../adr/0040-llm-node.md) |
+| 2026-10-25 | [Python ノードと入力ノード（rev2 の第 2 段階）](20261025-42-python-node.md) | [0041](../adr/0041-python-node.md) |

@@ -87,9 +87,10 @@ const sweep = (dir) => {   // 10 分より古いジョブは、呼んだ側が�
 
 const list = (title, a) => (a.length ? `${title}: ${a.join(', ')}\n` : '');
 
-/** code を、ノード box の中身を使って実行する。jobsDir は、実行役と共有するジョブ置き場 */
+/** code を、ノード box の中身を使って実行する。box がなければ（Python ノード。ADR 0041）、ファイルなしで実行し、標準出力と標準エラーだけ返す。
+ * jobsDir は、実行役と共有するジョブ置き場 */
 export async function runPython({ box, code, jobsDir, timeoutSec = LIMITS.timeoutSec }) {
-  box.need('run');
+  box?.need('run');
   if (typeof code !== 'string' || !code.trim() || Buffer.byteLength(code) > LIMITS.codeBytes) throw new Error(`code は文字列で、${LIMITS.codeBytes / 1024} KB まで`);
   fs.mkdirSync(jobsDir, { recursive: true });
   sweep(jobsDir);
@@ -98,7 +99,7 @@ export async function runPython({ box, code, jobsDir, timeoutSec = LIMITS.timeou
   fs.mkdirSync(work, { recursive: true, mode: 0o777 });
   fs.chmodSync(job, 0o777); fs.chmodSync(work, 0o777);
   try {
-    const manifest = stageIn(box, work);
+    const manifest = box ? stageIn(box, work) : {};
     fs.writeFileSync(path.join(job, 'code.py'), code);
     fs.writeFileSync(path.join(job, 'job.json.tmp'), JSON.stringify({ timeout: Math.min(timeoutSec, LIMITS.timeoutSec) }));
     fs.renameSync(path.join(job, 'job.json.tmp'), path.join(job, 'job.json'));   // 最後に置く（実行役はこれを合図に取り出す）
@@ -109,6 +110,7 @@ export async function runPython({ box, code, jobsDir, timeoutSec = LIMITS.timeou
       await new Promise((r) => setTimeout(r, 150));
     }
     const r = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+    if (!box) return r;   // Python ノード: 呼んだ側が、結果の形に整える
     const { done, skipped } = stageOut(box, work, manifest);
     const head = r.timed_out ? `時間切れ（${LIMITS.timeoutSec} 秒）で止めた` : `終了コード: ${r.exit}`;
     return [head, r.stdout && `--- 標準出力 ---\n${r.stdout}`, r.stderr && `--- 標準エラー ---\n${r.stderr}`,

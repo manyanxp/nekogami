@@ -17,6 +17,7 @@ import { readTheme } from './theme.mjs';
 import { z } from 'zod';
 import { DIR_PREFIX, buildDirServers, checkDirAccess, loadDirNodes } from './fs-tools.mjs';
 import { runPython } from './py-exec.mjs';
+import { PY_PREFIX, buildPyServers, checkPyAccess, loadPyNodes } from './py-tools.mjs';
 import { LLM_PREFIX, buildLlmServers, checkLlmAccess, loadLlmNodes } from './llm-tools.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -165,12 +166,14 @@ async function canUseTool(toolName, input, target, user, opts) {
   } else if (toolName.startsWith('mcp__azure__')) {
     allowed = ALLOW_AZURE_MCP;
     reason = allowed ? '' : 'Azure MCP はこのサーバーで無効化されています (ALLOW_AZURE_MCP=0)';
-  } else if (toolName.startsWith(`mcp__${DIR_PREFIX}`) || toolName.startsWith(`mcp__${LLM_PREFIX}`)) {   // ディレクトリ・LLM のノード。ノードの権限と、呼んだ担当の接続の両方を確かめる
+  } else if (toolName.startsWith(`mcp__${DIR_PREFIX}`) || toolName.startsWith(`mcp__${LLM_PREFIX}`) || toolName.startsWith(`mcp__${PY_PREFIX}`)) {   // ディレクトリ・LLM・Python のノード。ノードの権限と、呼んだ担当の接続の両方を確かめる
     const callerName = opts?.agentID ? agentTypeById.get(opts.agentID) : chatTargets().get(target)?.agent;
     const callerTools = loadAgentTools()[callerName];
     const r = toolName.startsWith(`mcp__${DIR_PREFIX}`)
       ? checkDirAccess({ toolName, nodes: loadDirNodes(REGISTRY_FILE), callerName, callerTools })
-      : checkLlmAccess({ toolName, nodes: loadLlmNodes(REGISTRY_FILE), callerName, callerTools });
+      : toolName.startsWith(`mcp__${PY_PREFIX}`)
+        ? checkPyAccess({ toolName, nodes: loadPyNodes(REGISTRY_FILE), callerName, callerTools })
+        : checkLlmAccess({ toolName, nodes: loadLlmNodes(REGISTRY_FILE), callerName, callerTools });
     allowed = r.ok;
     reason = r.reason || '';
   } else if (toolName === 'Write' || toolName === 'Edit') {
@@ -252,6 +255,7 @@ async function runChat(text, target, user) {
         mcpServers: {   // 権限のある操作だけ公開する
           ...buildDirServers({ sdk, z, nodes: loadDirNodes(REGISTRY_FILE), root: FS_ROOT, run: (box, code) => runPython({ box, code, jobsDir: JOBS_DIR }) }),
           ...buildLlmServers({ sdk, z, nodes: loadLlmNodes(REGISTRY_FILE), baseUrl: OLLAMA_URL }),
+          ...buildPyServers({ sdk, z, nodes: loadPyNodes(REGISTRY_FILE), run: (code) => runPython({ code, jobsDir: JOBS_DIR }) }),
         },
         canUseTool: (n, i, o) => canUseTool(n, i, target, user, o),
       },

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .definitions import DefinitionError, DefinitionStore, entry_node, merge_tools, node_entry
 from .icons import IconError, IconStore
+from .pynodes import MAX_VALUE, PY_TYPES, binding_errors, IDENT_RE, parse_function, parse_input
 
 KINDS = ('orchestrator', 'suborchestrator', 'agent', 'subagent')
 # 親にできる種別。orchestrator（猫神さま）は親なし。suborchestrator は orchestrator の直下
@@ -20,8 +21,8 @@ PARENT_KINDS = {
     'subagent': ('agent', 'suborchestrator', 'orchestrator'),
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
-TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory', 'llm')
-NODE_TOOL_KINDS = ('directory', 'llm')   # Agent Console がプロセス内の MCP サーバーとして公開するノード。定義ファイルのある担当にだけつなげる
+TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory', 'llm', 'python', 'input')
+NODE_TOOL_KINDS = ('directory', 'llm', 'python')   # Agent Console がプロセス内の MCP サーバーとして公開するノード。定義ファイルのある担当にだけつなげる
 # LLM ノード（ローカル LLM。ADR 0040）の設定。モデル名は Ollama のもの
 LLM_MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$')
 LLM_MAX_PROMPT = 8000
@@ -146,6 +147,46 @@ def _clean_llm_fields(data, base=None):
         if isinstance(m, bool) or not isinstance(m, int) or not 16 <= m <= 4096:
             raise ValidationError('max_tokens は 16〜4096 の整数')
         out['max_tokens'] = m
+    return out
+
+
+def _clean_py_fields(data, base=None):
+    """Python ノードの code / func を検証し、引数（params）と説明（doc）を読み取る。コードは実行しない（ADR 0041）"""
+    out = dict(base or {})
+    if 'code' in data or 'func' in data or not base:
+        code = data.get('code', out.get('code'))
+        func = str(data.get('func', out.get('func', 'main')) or '').strip()
+        try:
+            info = parse_function(code, func)
+        except ValueError as e:
+            raise ValidationError(str(e))
+        out.update(code=code, func=func, params=info['params'], doc=info['doc'])
+    return out
+
+
+def _clean_input_fields(data, base=None):
+    """入力ノードの param（引数名）/ dtype（データ型）/ value（値の文字列）を検証する。値は型に従って読めなければならない"""
+    out = dict(base or {})
+    if 'param' in data or not base:
+        param = str(data.get('param') or '').strip()
+        if not IDENT_RE.match(param):
+            raise ValidationError('param（引数名）は、英数字と _ からなる Python の名前')
+        out['param'] = param
+    if 'dtype' in data or not base:
+        dtype = data.get('dtype', 'str')
+        if dtype not in PY_TYPES:
+            raise ValidationError(f'dtype は {PY_TYPES} のいずれか')
+        out['dtype'] = dtype
+    if 'value' in data or not base:
+        value = data.get('value', '')
+        value = '' if value is None else value
+        if not isinstance(value, str) or len(value) > MAX_VALUE:
+            raise ValidationError(f'value は文字列で、{MAX_VALUE} 文字まで')
+        out['value'] = value
+    try:
+        out['parsed'] = parse_input(out['dtype'], out['value'])   # 実行側（Agent Console）が読む、型に従った値
+    except ValueError as e:
+        raise ValidationError(str(e))
     return out
 
 
@@ -284,6 +325,9 @@ class Registry:
         unknown = [i for i in ids if i not in self._tools]
         if unknown:
             raise ValidationError(f'未登録のツール: {unknown[0]}')
+        inputs = [self._tools[i]['name'] for i in ids if self._tools[i]['kind'] == 'input']
+        if inputs:
+            raise ValidationError(f'入力ノードは担当にはつなげない（Python ノードにつなぐ）: {", ".join(inputs)}')
         return list(dict.fromkeys(ids))
 
     def create(self, data, eid=None, protected=False, definition=None):
@@ -351,8 +395,8 @@ class Registry:
             kind = data.get('kind') or 'custom'
             if kind not in TOOL_KINDS:
                 raise ValidationError(f'kind は {TOOL_KINDS} のいずれか')
-            if kind in NODE_TOOL_KINDS and not DIR_NAME_RE.match(name):
-                raise ValidationError('ディレクトリ・LLM の名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
+            if kind in NODE_TOOL_KINDS + ('input',) and not DIR_NAME_RE.match(name):
+                raise ValidationError('ディレクトリ・LLM・Python・入力の名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
             if any(t['name'] == name for t in self._tools.values()):
                 raise ValidationError(f'ツール "{name}" は既に使われている')
             tid = tid or str(uuid.uuid4())
@@ -363,6 +407,11 @@ class Registry:
                 t['perms'] = _clean_dir_perms(data.get('perms'))
             if kind == 'llm':
                 t.update(_clean_llm_fields(data))
+            if kind == 'python':
+                t.update(_clean_py_fields(data))
+                t['input_ids'] = []
+            if kind == 'input':
+                t.update(_clean_input_fields(data))
             self._tools[tid] = t
             self._save()
             return dict(t)
@@ -386,8 +435,34 @@ class Registry:
                 self._tools[tid].update(_clean_llm_fields(patch, base=self._tools[tid]))
             elif any(k in patch for k in ('model', 'prompt', 'temperature', 'max_tokens')):
                 raise ValidationError('model・prompt・temperature・max_tokens を持てるのは、LLM ノードだけ')
+            kind = self._tools[tid]['kind']
+            if kind == 'python':   # コード・関数名。つないでいる入力ノードと合わなくなる変更は、受け付けない
+                new = _clean_py_fields(patch, base=self._tools[tid])
+                if 'input_ids' in patch:
+                    new['input_ids'] = self._clean_input_ids(patch['input_ids'])
+                self._check_bindings(new, [self._tools[i] for i in new.get('input_ids', [])])
+                self._tools[tid].update(new)
+            elif kind == 'input':   # 値・型・引数名。つなぎ先の Python ノードと合わなくなる変更は、受け付けない
+                new = _clean_input_fields(patch, base=self._tools[tid])
+                for p in self._tools.values():
+                    if p['kind'] == 'python' and tid in p.get('input_ids', []):
+                        self._check_bindings(p, [new if i == tid else self._tools[i] for i in p['input_ids']])
+                self._tools[tid].update(new)
+            elif any(k in patch for k in ('code', 'func', 'input_ids', 'param', 'dtype', 'value')):
+                raise ValidationError('code・func・input_ids は Python ノード、param・dtype・value は入力ノードだけが持てる')
             self._save()
             return dict(self._tools[tid])
+
+    def _clean_input_ids(self, ids):
+        if not isinstance(ids, list) or not all(isinstance(i, str) and self._tools.get(i, {}).get('kind') == 'input' for i in ids):
+            raise ValidationError('input_ids は、入力ノードの ID の配列')
+        return list(dict.fromkeys(ids))
+
+    @staticmethod
+    def _check_bindings(py, inputs):
+        errors = binding_errors(py.get('params', []), inputs)
+        if errors:
+            raise ValidationError(f'Python ノード {py["name"]} と入力ノードが合わない: ' + '; '.join(errors))
 
     def delete_tool(self, tid):
         with self._lock:
@@ -396,6 +471,9 @@ class Registry:
             if self._tools[tid]['kind'] in NODE_TOOL_KINDS:
                 self._detach_directory(self._tools[tid]['name'])
             del self._tools[tid]
+            for t in self._tools.values():   # 消した入力ノードは、Python ノードの入力から外す
+                if tid in t.get('input_ids', []):
+                    t['input_ids'] = [i for i in t['input_ids'] if i != tid]
             for e in self._items.values():
                 if tid in e['tool_ids']:
                     e['tool_ids'] = [i for i in e['tool_ids'] if i != tid]

@@ -14,7 +14,13 @@ export type DirPerms = Record<DirPerm, boolean>;
 /** kind が directory のツールは、担当が読み書きできる作業領域内のディレクトリ（path と perms を持つ。ADR 0037） */
 export interface Tool { id: string; name: string; kind: string; description?: string; pos: { x: number; y: number } | null; path?: string; perms?: Partial<DirPerms>;
   /** kind が llm のツールは、ローカル LLM（Ollama）のノード。model はその名前、prompt はシステムプロンプト（ADR 0040） */
-  model?: string; prompt?: string; temperature?: number; max_tokens?: number }
+  model?: string; prompt?: string; temperature?: number; max_tokens?: number;
+  /** kind が python のツールは、関数のコード（func を呼ぶ）。params は型注釈から読んだ引数、input_ids はつないだ入力ノード（ADR 0041） */
+  code?: string; func?: string; params?: PyParam[]; doc?: string; input_ids?: string[];
+  /** kind が input のツールは、Python ノードの引数の既定値（param = 引数名、dtype = データ型、value = 値の文字列） */
+  param?: string; dtype?: PyType; value?: string }
+export type PyType = 'str' | 'int' | 'float' | 'bool' | 'list' | 'dict' | 'tuple' | 'set';
+export interface PyParam { name: string; type: PyType; required: boolean; default: unknown }
 
 export interface DockerStatus { state: string; detail?: string }
 export type Role = 'admin' | 'user';

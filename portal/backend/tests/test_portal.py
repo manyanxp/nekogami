@@ -269,6 +269,40 @@ class RegistryTest(Base):
         self.reg.delete_tool(node['id'])
         self.assertNotIn('llm-local-qwen', self._agent_text('.claude/agents/x.md'))
 
+    def test_python_and_input_nodes(self):
+        """Python ノード（関数のコード）と入力ノード（引数の既定値）。コードは実行せず検証する（ADR 0041）"""
+        code = 'def main(n: int, tags: list = None):\n    """合計"""\n    return n\n'
+        self.reg.sync_builtin('http://x')
+        py = self.reg.create_tool({'name': 'calc', 'kind': 'python', 'code': code, 'func': 'main'})
+        self.assertEqual([(p['name'], p['type'], p['required']) for p in py['params']], [('n', 'int', True), ('tags', 'list', False)])
+        self.assertEqual(py['doc'], '合計')
+        for bad in ({'code': 'def main(n): pass'}, {'code': 'def other(n: int): pass'}, {'code': 'def main(:'}):
+            with self.assertRaises(ValidationError):
+                self.reg.update_tool(py['id'], bad)
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'p2', 'kind': 'python', 'code': 'x = 1'})
+        i = self.reg.create_tool({'name': 'n-in', 'kind': 'input', 'param': 'n', 'dtype': 'int', 'value': '42'})
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'bad-in', 'kind': 'input', 'param': 'n', 'dtype': 'int', 'value': '4.2'})
+        self.reg.update_tool(py['id'], {'input_ids': [i['id']]})
+        self.assertEqual(self.reg.list_tools()[-2]['kind'] in ('python', 'input'), True)
+        # つないだ後に、合わなくなる変更は受け付けない（入力ノード側も、Python ノード側も）
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(i['id'], {'dtype': 'str'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(py['id'], {'code': 'def main(m: int): pass'})
+        self.reg.update_tool(i['id'], {'value': '7'})
+        # 入力ノードは担当につなげない。Python ノードは、ディレクトリ・LLM と同じく担当につなぐ
+        ent = next(e for e in self.reg.list() if e['name'] == 'azure-x')
+        with self.assertRaises(ValidationError):
+            self.reg.update(ent['id'], {'tool_ids': [i['id']]})
+        self.reg.update(ent['id'], {'tool_ids': [py['id']]})
+        self.assertIn('mcp__py-calc__*', self._agent_text('.claude/agents/x.md'))
+        self.reg.delete_tool(i['id'])
+        self.assertEqual(next(t for t in self.reg.list_tools() if t['id'] == py['id'])['input_ids'], [])
+        self.reg.delete_tool(py['id'])
+        self.assertNotIn('py-calc', self._agent_text('.claude/agents/x.md'))
+
     def test_nodes_on_suborchestrator_apply_to_its_delegate(self):
         """サブオーケストレーターへの接続は、委任先（type=agent）の担当の定義ファイルに反映される（ADR 0040）"""
         self.reg.sync_builtin('http://x')

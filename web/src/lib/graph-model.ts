@@ -1,6 +1,13 @@
 // ノードグラフ用の純粋ロジック（描画は @xyflow/react、通信は api.ts）。
 // 親子の規則はバックエンド（registry.py の PARENT_KINDS）が正。ここは操作中に即座に可否を示すための写し。
-import type { DirPerm, DirPerms, Entity, Kind, Tool } from './types';
+import type { DirPerm, DirPerms, Entity, Kind, PyType, Tool } from './types';
+
+/** Python 標準のデータ型（入力ノードで選べる）と、値の書き方の例 */
+export const PY_TYPES: { key: PyType; example: string }[] = [
+  { key: 'str', example: 'そのまま文字を書く' }, { key: 'int', example: '42' }, { key: 'float', example: '3.14' }, { key: 'bool', example: 'true / false' },
+  { key: 'list', example: '[1, 2, 3]' }, { key: 'dict', example: '{"a": 1}' }, { key: 'tuple', example: '[1, 2]（配列で書く）' }, { key: 'set', example: '[1, 2]（配列で書く）' },
+];
+export const PY_SAMPLE = 'def main(x: int, label: str = "a"):\n    """説明（1 行目が担当に見える）"""\n    return {"x2": x * 2, "label": label}\n';
 
 export const PARENT_KINDS: Record<Kind, Kind[]> = {
   orchestrator: [],
@@ -29,13 +36,15 @@ export const DIR_PERMS: { key: DirPerm; label: string }[] = [{ key: 'list', labe
 export const permLabels = (perms?: Partial<DirPerms>) => DIR_PERMS.filter((p) => perms?.[p.key]).map((p) => p.label);
 /** 書き込み・削除・Python 実行ができるディレクトリ。担当に新しく接続するときは確認が要る */
 export const isRiskyDir = (t?: Tool) => t?.kind === 'directory' && RISKY_DIR_PERMS.some((k) => t.perms?.[k]);
-const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind === 'llm' ? `ローカル LLM · ${t.model ?? ''}` : t.kind);
+const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind === 'llm' ? `ローカル LLM · ${t.model ?? ''}`
+  : t.kind === 'python' ? `Python · ${t.func ?? 'main'}(${(t.params ?? []).map((p) => p.name).join(', ')})`
+  : t.kind === 'input' ? `入力 · ${t.param ?? ''}: ${t.dtype ?? ''}` : t.kind);
 
 const COL = 270;
 const ROW = 84;
 
 export interface GraphNode { id: string; type: 'entity' | 'tool'; kind: string; label: string; sub: string; protected: boolean; icon?: string | null; x: number; y: number }
-export interface GraphEdge { id: string; type: 'tree' | 'tool'; from: string; to: string }
+export interface GraphEdge { id: string; type: 'tree' | 'tool' | 'input'; from: string; to: string }
 
 /** 配置（pos）が無いノードを、親子の深さ × 並び順で自動配置する。ツールは右端の列に並べる。 */
 export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
@@ -69,6 +78,7 @@ export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNod
     if (e.parent_id && known.has(e.parent_id)) edges.push({ id: `tree:${e.parent_id}>${e.id}`, type: 'tree', from: e.parent_id, to: e.id });
     for (const tid of e.tool_ids || []) if (known.has(tid)) edges.push({ id: `tool:${e.id}>${tid}`, type: 'tool', from: e.id, to: tid });
   }
+  for (const t of tools) for (const iid of t.input_ids || []) if (known.has(iid)) edges.push({ id: `input:${iid}>${t.id}`, type: 'input', from: iid, to: t.id });
   return { nodes, edges };
 }
 
@@ -80,13 +90,26 @@ export function isDescendant(entities: Entity[], ancestorId: string, id: string)
   return false;
 }
 
-export type Connect = { ok: false; reason: string } | { ok: true; action: 'reparent'; from: Entity; to: Entity } | { ok: true; action: 'tool'; from: Entity; to: Tool };
+export type Connect = { ok: false; reason: string } | { ok: true; action: 'reparent'; from: Entity; to: Entity } | { ok: true; action: 'tool'; from: Entity; to: Tool } | { ok: true; action: 'input'; from: Tool; to: Tool };
 
 /** 出力ピン(from) → 入力ピン(to) の接続可否。ok なら action は 'reparent'（親子）か 'tool'（ツール接続）。 */
 export function canConnect(entities: Entity[], tools: Tool[], fromId: string, toId: string): Connect {
+  const fromTool = tools.find((t) => t.id === fromId);
+  if (fromTool?.kind === 'input') {   // 入力ノード → Python ノード（引数の既定値になる）
+    const py = tools.find((t) => t.id === toId);
+    if (py?.kind !== 'python') return { ok: false, reason: '入力ノードは、Python ノードにだけつなげる' };
+    if ((py.input_ids || []).includes(fromId)) return { ok: false, reason: 'すでに接続されている' };
+    const param = (py.params || []).find((p) => p.name === fromTool.param);
+    if (!param) return { ok: false, reason: `関数 ${py.func} に引数 ${fromTool.param} がない` };
+    if (param.type !== fromTool.dtype) return { ok: false, reason: `型が合わない（入力 ${fromTool.dtype}、引数 ${param.type}）` };
+    const twin = tools.find((t) => (py.input_ids || []).includes(t.id) && t.param === fromTool.param);
+    if (twin) return { ok: false, reason: `引数 ${fromTool.param} には、入力ノード ${twin.name} がすでにつながっている` };
+    return { ok: true, action: 'input', from: fromTool, to: py };
+  }
   const from = entities.find((e) => e.id === fromId);
-  if (!from) return { ok: false, reason: '接続元はエージェント側のノードだけ' };
+  if (!from) return { ok: false, reason: '接続元はエージェント側か、入力ノードだけ' };
   const toTool = tools.find((t) => t.id === toId);
+  if (toTool?.kind === 'input') return { ok: false, reason: '入力ノードは担当にはつなげない（Python ノードにつなぐ）' };
   if (toTool) return (from.tool_ids || []).includes(toId) ? { ok: false, reason: 'すでに接続されている' } : { ok: true, action: 'tool', from, to: toTool };
   const to = entities.find((e) => e.id === toId);
   if (!to) return { ok: false, reason: '接続先が見つからない' };

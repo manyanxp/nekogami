@@ -324,6 +324,14 @@ button .ico:only-child, .iconbtn .ico { margin-right: 0; }
 .perm-row label.risky { color: var(--warn); }
 .lg.dir { background: #4cc9d6; }
 
+/* Python ノードと入力ノード（ADR 0041） */
+.gnode.py .head { background: #f2b84c; }
+.gnode.input .head { background: #8bc96a; }
+.lg.py { background: #f2b84c; }
+.lg.input { background: #8bc96a; }
+.llm-prompt.code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+#graph .edge.input path.react-flow__edge-path { stroke: #8bc96a; }
+
 /* LLM ノード（ローカル LLM。ADR 0040） */
 .gnode.llm .head { background: #b48cf2; }
 .lg.llm { background: #b48cf2; }
