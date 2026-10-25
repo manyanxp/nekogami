@@ -21,6 +21,39 @@ PARENT_KINDS = {
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
 TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory')
+# session 型の委任先に持たせられる env と args（ADR 0039）。nekogamisama/bin/delegate.sh の許可リストと同じ規則
+SESSION_ENV_KEYS = frozenset({'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+                              'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
+                              'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+                              'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS'})
+SESSION_ARG_FLAGS = {'--tools': True, '--max-turns': True, '--model': True, '--strict-mcp-config': False, '--disable-slash-commands': False}   # True = 値を取る
+SESSION_VALUE_RE = re.compile(r'[A-Za-z0-9_.:/,*@-]{0,200}')
+
+
+def _clean_session_env(env):
+    if not isinstance(env, dict) or any(k not in SESSION_ENV_KEYS for k in env) or not all(isinstance(v, str) and SESSION_VALUE_RE.fullmatch(v) for v in env.values()):
+        raise ValidationError(f'env は、{sorted(SESSION_ENV_KEYS)} をキーにした文字列のオブジェクト（値は英数字と . _ : / , * @ - のみ）')
+    return dict(env)
+
+
+def _clean_session_args(args):
+    out, i = [], 0
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        raise ValidationError('args は文字列の配列')
+    while i < len(args):
+        flag = args[i]
+        if flag not in SESSION_ARG_FLAGS:
+            raise ValidationError(f'args に使えるのは {sorted(SESSION_ARG_FLAGS)} だけ: {flag}')
+        out.append(flag)
+        if SESSION_ARG_FLAGS[flag]:
+            if i + 1 >= len(args) or not SESSION_VALUE_RE.fullmatch(args[i + 1]) or not args[i + 1] or args[i + 1].startswith('-'):
+                raise ValidationError(f'{flag} には値が要る（英数字と . _ : / , * @ - のみ）')
+            out.append(args[i + 1])
+            i += 1
+        i += 1
+    return out
+
+
 DIR_PERMS = ('list', 'read', 'write', 'delete', 'exec')   # 参照（一覧）・読み込み・書き込み・削除・Python の実行（ADR 0038）
 DIR_RISKY_PERMS = ('write', 'delete', 'exec')   # 担当に新しく足すとき、確認が要る権限
 DIR_SEGMENT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
@@ -530,6 +563,11 @@ class Registry:
                 if not p.is_dir() or (p != self.project_dir and self.project_dir not in p.parents):
                     raise ValidationError('dir はプロジェクト配下の既存フォルダを指定する')
                 new = {'type': 'session', 'dir': os.path.relpath(p, self.delegate_file.parent), 'description': desc}
+                old = self._delegate_read().get(name) or {}
+                for key, clean in (('env', _clean_session_env), ('args', _clean_session_args)):   # 指定がなければ、今の値を保つ（画面の編集で消えない）
+                    value = entry[key] if key in entry else old.get(key)
+                    if value:
+                        new[key] = clean(value)
             else:
                 raise ValidationError("type は 'agent' か 'session'")
             data = self._delegate_read()

@@ -42,6 +42,7 @@ Azure Sage の設計判断と仕様の記録です。1 ファイル 1 判断、�
 | [0036](0036-trace-to-terminal-and-ui-icons.md) | トレースのパネルを廃止してターミナル窓に統合、UI アイコン | Accepted |
 | [0037](0037-directory-nodes-and-permissions.md) | ディレクトリのノードと権限（担当が読み書き・削除できる作業領域） | Accepted |
 | [0038](0038-python-execution-sandbox.md) | Python の生成・実行（実行役のコンテナと「Python 実行」権限） | Accepted |
+| [0039](0039-local-llm-agent.md) | ローカル LLM の担当（Ollama + qwen3:8b、別セッション型） | Accepted |
 
 ## 運用ルール
 

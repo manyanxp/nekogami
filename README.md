@@ -190,6 +190,7 @@ docker compose exec api python -m portal_api users list
   - 例: `猫神さま、今日は何ができるのじゃ？`
   - 例: `/azure-sage Microsoft Foundry の料金体系を調べて`
 - **担当を足す**: 管理ページ `/admin` で「＋ エージェント」などを選びます。ノードをドラッグしてつなぎ替えます。変更は `.claude/agents/` の定義ファイルに書き込まれます（元のファイルは `portal/data/backups` に退避されます）。
+- **ローカル LLM を使う**（任意。NVIDIA GPU と NVIDIA Container Toolkit が要ります）: `docker compose --profile local-llm up -d ollama` で起動し、`docker compose --profile local-llm exec ollama ollama pull qwen3:8b` でモデルを取得します。`/local-llm 依頼文` で、手元の GPU で動くモデルに、短い質問や要約を任せられます（読み取り専用。RTX 3080 10GB で動作確認。文脈は 16K）。
 - **Python でデータ分析させる**: ディレクトリのノードで「Python 実行」を許し、`py-analyst` につなぎます。ネットワークのない専用コンテナ（`py-sandbox`）で、numpy・pandas・scipy・matplotlib・scikit-learn・openpyxl が使えます。作業は、そのディレクトリの中身のコピーで行い、書き込み・削除を許した分だけが戻ります（30 秒まで）。
 - **担当にディレクトリを渡す**: 管理ページの「ディレクトリ」で、作業領域 `workspace/` の中のフォルダをノードとして作り、エージェントへワイヤーでつなぎます。権限（参照・読み込み・書き込み・削除）はチェックボックスで、既定はすべてオフです。つないだ担当だけが、許した操作だけをその中で行えます。
 - **口調を変える**: 管理ページの「猫神さまの性格」で、一人称や口調を設定します。

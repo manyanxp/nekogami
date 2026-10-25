@@ -1,5 +1,7 @@
 import http.server
 import json
+import os
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -337,6 +339,17 @@ class RegistryTest(Base):
                           ('x', 'str')):
             with self.assertRaises(ValidationError, msg=str((name, bad))):
                 self.reg.delegation_put(name, bad)
+        # env と args（ローカル LLM の担当など。ADR 0039）: 許可リストにあるものだけ。指定がなければ今の値を保つ
+        env = {'ANTHROPIC_BASE_URL': 'http://ollama:11434', 'ANTHROPIC_MODEL': 'qwen3:8b', 'ANTHROPIC_API_KEY': ''}
+        args = ['--tools', 'Read,Glob,Grep', '--strict-mcp-config', '--max-turns', '8']
+        r = self.reg.delegation_put('side', {'type': 'session', 'dir': '../tools-dir', 'env': env, 'args': args})
+        self.assertEqual((r['env'], r['args']), (env, args))
+        r = self.reg.delegation_put('side', {'type': 'session', 'dir': '../tools-dir', 'description': '画面から編集'})
+        self.assertEqual((r['env'], r['args']), (env, args))
+        for bad in ({'env': {'PATH': '/tmp'}}, {'env': {'ANTHROPIC_MODEL': 'a b'}}, {'env': {'ANTHROPIC_MODEL': 'x;rm'}}, {'env': ['A']},
+                    {'args': ['--dangerously-skip-permissions']}, {'args': ['--tools']}, {'args': ['--tools', '--max-turns']}, {'args': ['--model', 'a b']}, {'args': 'x'}):
+            with self.assertRaises(ValidationError, msg=str(bad)):
+                self.reg.delegation_put('side', {'type': 'session', 'dir': '../tools-dir', **bad})
         self.reg.delegation_delete('side')
         with self.assertRaises(NotFound):
             self.reg.delegation_delete('side')
@@ -957,6 +970,41 @@ class AuthTest(Base):
         hello = {'kind': 'hello', 'runningChats': [{'target': chat.CHAT_AGENT, 'user': 'alice'}]}
         self.assertIn('"running": true', chat.filter_chat_event(line(hello), 'alice'))
         self.assertIn('"running": false', chat.filter_chat_event(line(hello), 'bob'))
+
+class DelegateScriptTests(unittest.TestCase):
+    """nekogamisama/bin/delegate.sh が、台帳の env / args を、許可リストの範囲で claude に渡す（ADR 0039）。"""
+
+    SCRIPT = Path(__file__).resolve().parents[3] / 'nekogamisama' / 'bin' / 'delegate.sh'
+
+    def run_script(self, entry, name='loc'):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            (root / 'bin').mkdir()
+            (root / 'bin' / 'delegate.sh').write_text(self.SCRIPT.read_text(encoding='utf-8'))
+            (root / 'bin' / 'delegate.sh').chmod(0o755)
+            (root / 'work').mkdir()
+            (root / 'suborchestrators.json').write_text(json.dumps({name: {'type': 'session', 'dir': 'work', **entry}}))
+            fake = root / 'fake-claude'
+            fake.write_text('#!/bin/sh\necho "model=$ANTHROPIC_MODEL key=[$ANTHROPIC_API_KEY] args=$*"; cat\n')
+            fake.chmod(0o755)
+            return subprocess.run([str(root / 'bin' / 'delegate.sh'), name, '依頼'], capture_output=True, text=True, timeout=30,
+                                  env={**os.environ, 'CLAUDE_BIN': str(fake)})
+
+    def test_env_and_args_are_passed(self):
+        r = self.run_script({'env': {'ANTHROPIC_MODEL': 'qwen3:8b', 'ANTHROPIC_API_KEY': ''}, 'args': ['--tools', 'Read,Glob', '--strict-mcp-config']})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, 'model=qwen3:8b key=[] args=-p --tools Read,Glob --strict-mcp-config\n依頼')
+
+    def test_plain_entry_still_works(self):
+        r = self.run_script({})
+        self.assertEqual((r.returncode, r.stdout), (0, 'model= key=[] args=-p\n依頼'))
+
+    def test_disallowed_values_are_refused(self):
+        for entry in ({'env': {'PATH': '/x'}}, {'env': {'ANTHROPIC_MODEL': 'a b'}}, {'args': ['--dangerously-skip-permissions']}, {'args': ['--tools']}):
+            r = self.run_script(entry)
+            self.assertNotEqual(r.returncode, 0, str(entry))
+            self.assertEqual(r.stdout, '', str(entry))   # claude は起動しない
+
 
 
 if __name__ == '__main__':

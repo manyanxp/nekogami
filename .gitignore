@@ -29,3 +29,6 @@ web/next-env.d.ts
 .env
 .env.*
 .DS_Store
+
+# Claude Code が各 PC で作る手元だけの設定（MCP の承認など）
+**/.claude/settings.local.json

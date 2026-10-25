@@ -85,5 +85,25 @@ services:
       - ./sandbox/jobs:/jobs
     restart: unless-stopped
 
+  # ローカル LLM（ADR 0039）。`docker compose --profile local-llm up -d` のときだけ起動する（NVIDIA GPU が要る）。
+  # ネットワークには出さない（ports なし）。neko-brain から http://ollama:11434 で使う
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-llm"]
+    environment:
+      - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-16384}   # 文脈の長さ。伸ばすほど VRAM を食う
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
 volumes:
   claude-config:
+  ollama-models:
