@@ -238,6 +238,181 @@ class RegistryTest(Base):
         self.assertNotIn('dir-docs', self._agent_text('.claude/agents/x.md'))
         self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))   # 他のノードの接続は残る
 
+    def test_llm_nodes(self):
+        self.reg.sync_builtin('http://x')
+        x = next(e for e in self.reg.list() if e['name'] == 'azure-x')   # 定義ファイル（x.md）のある担当
+        node = self.reg.create_tool({'name': 'local-qwen', 'kind': 'llm', 'model': 'qwen3:8b', 'prompt': '短く答える'})
+        self.assertEqual((node['model'], node['prompt'], node['temperature'], node['max_tokens']), ('qwen3:8b', '短く答える', 0.7, 1024))
+        for bad in ({'model': ''}, {'model': 'a b'}, {'model': 'x;y'}, {'model': 'm', 'temperature': 3}, {'model': 'm', 'temperature': True},
+                    {'model': 'm', 'max_tokens': 8}, {'model': 'm', 'max_tokens': 99999}, {'model': 'm', 'max_tokens': 1.5}, {'model': 'm', 'prompt': 'x' * 8001}, {'model': 'm', 'prompt': 5}):
+            with self.assertRaises(ValidationError, msg=str(bad)):
+                self.reg.create_tool({'name': 'bad-llm', 'kind': 'llm', **bad})
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'my.llm', 'kind': 'llm', 'model': 'm'})        # MCP のサーバー名にするので記号は不可
+        # 編集: 指定した項目だけが変わる
+        n2 = self.reg.update_tool(node['id'], {'prompt': '丁寧に', 'temperature': 0.2})
+        self.assertEqual((n2['model'], n2['prompt'], n2['temperature'], n2['max_tokens']), ('qwen3:8b', '丁寧に', 0.2, 1024))
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(node['id'], {'model': 'bad model'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(next(t['id'] for t in self.reg.list_tools() if t['name'] == 'Read'), {'prompt': 'x'})      # 他の種類は不可
+        # 接続: 確認なしで、定義ファイルに mcp__llm-<名前>__* が入る
+        self.reg.update(x['id'], {'tool_ids': x['tool_ids'] + [node['id']]})
+        self.assertIn('mcp__llm-local-qwen__*', self._agent_text('.claude/agents/x.md'))
+        # 定義ファイルのない担当（猫神さま）には、つなげない
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        with self.assertRaises(ValidationError):
+            self.reg.update(neko['id'], {'tool_ids': [node['id']]})
+        # 再取り込みでも保たれ、ノードを消すと定義ファイルからも外れる
+        self.reg.sync_builtin('http://x')
+        self.assertIn(node['id'], self.reg.get(x['id'])['tool_ids'])
+        self.reg.delete_tool(node['id'])
+        self.assertNotIn('llm-local-qwen', self._agent_text('.claude/agents/x.md'))
+
+    def test_callees_and_auto_spawn(self):
+        """担当 → 担当の「呼ぶ」接続と、担当の自動作成のスイッチ（ADR 0043）。どちらも定義ファイルの tools に反映される"""
+        self.reg.sync_builtin('http://x')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text('{}')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        sub = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sp-sub', 'parent_id': neko['id']})
+        ag = self.reg.create_claude({'kind': 'agent', 'name': 'sp-ag', 'parent_id': neko['id']})
+        tools_of = lambda eid: self.reg.get_definition(eid)['tools']
+        # 自動作成のスイッチ: サブオーケストレーターだけ。入れると tools に入り、切ると消える
+        with self.assertRaises(ValidationError):
+            self.reg.update(ag['id'], {'auto_spawn': True})
+        self.reg.update(sub['id'], {'auto_spawn': True})
+        self.assertIn('mcp__neko-spawn__*', tools_of(sub['id']))
+        self.assertTrue(self.reg.get(sub['id'])['auto_spawn'])
+        self.reg.update(sub['id'], {'auto_spawn': False})
+        self.assertNotIn('mcp__neko-spawn__*', tools_of(sub['id']))
+        # 担当を呼ぶ接続: 呼ぶ側に Agent ツールが入る（読み取り専用の担当でも）。自分自身・猫神さま・輪は拒否
+        self.assertNotIn('Agent', tools_of(ag['id']))
+        self.reg.update(ag['id'], {'callee_ids': [sub['id']]})
+        self.assertIn('Agent', tools_of(ag['id']))
+        self.assertEqual(self.reg.get(ag['id'])['callee_ids'], [sub['id']])
+        for bad in ([ag['id']], [neko['id']], ['no-such']):
+            with self.assertRaises(ValidationError):
+                self.reg.update(ag['id'], {'callee_ids': bad})
+        with self.assertRaises(ValidationError):
+            self.reg.update(sub['id'], {'callee_ids': [ag['id']]})          # ag → sub → ag の輪
+        # 定義ファイルのない担当には使えない
+        bare = self.reg.create({'kind': 'agent', 'name': 'bare-ag', 'parent_id': neko['id']})
+        with self.assertRaises(ValidationError):
+            self.reg.update(bare['id'], {'callee_ids': [sub['id']]})
+        # 呼ばれる側を消すと、接続も外れる
+        self.reg.delete(sub['id'])
+        self.assertEqual(self.reg.get(ag['id'])['callee_ids'], [])
+
+    def test_nested_suborchestrators(self):
+        """サブオーケストレーターの入れ子（ADR 0042）: 置き場所、委任先、深さ、循環、条件"""
+        self.reg.sync_builtin('http://x')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text('{}')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        a = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-a', 'parent_id': neko['id']})
+        b = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-b', 'parent_id': a['id']})
+        self.assertEqual(b['definition']['path'], '.claude/agents/sub-a/sub-b.md')               # 親のフォルダに置く
+        c = self.reg.create_claude({'kind': 'agent', 'name': 'work-c', 'parent_id': b['id']})
+        self.assertEqual(c['definition']['path'], '.claude/agents/sub-b/work-c.md')               # 自分の配下は、自分の名前のフォルダ
+        dj = json.loads((self.root / 'nekogamisama' / 'suborchestrators.json').read_text())
+        self.assertIn('sub-a', dj)
+        self.assertNotIn('sub-b', dj)                                                              # 委任先に載るのは、猫神さま直下だけ
+        self.assertEqual(sorted(r['name'] for r in self.reg.admin_overview()['delegation'] if r['registered']), ['azure-sage', 'sub-a'])
+        self.assertEqual([m['name'] for m in self.reg.admin_overview()['misplaced'] if m['name'] != 'azure-x'], [])
+        # 深さの上限（猫神さまの下を 1 として 4 階層）
+        d = self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-d', 'parent_id': b['id']})
+        deep = self.reg.create_claude({'kind': 'agent', 'name': 'deep-ok', 'parent_id': d['id']})   # 猫神さま → a → b → d → 担当 = 4 階層
+        with self.assertRaises(ValidationError):
+            self.reg.create_claude({'kind': 'subagent', 'name': 'too-deep', 'parent_id': deep['id']})
+        # 循環と、Agent のない親
+        with self.assertRaises(ValidationError):
+            self.reg.update(a['id'], {'parent_id': d['id']})
+        self.reg.update(d['id'], {'tool_ids': self.reg.get(d['id'])['tool_ids'][:0]})
+        with self.assertRaises(ValidationError):
+            self.reg.create_claude({'kind': 'suborchestrator', 'name': 'sub-e', 'parent_id': d['id']})
+        # 付け替え: 猫神さま直下へ戻すと、ファイルが自分のフォルダに移り、委任先に載る。配下は付いてくる
+        self.reg.update(b['id'], {'parent_id': neko['id']})
+        self.assertEqual(self.reg.get(b['id'])['definition']['path'], '.claude/agents/sub-b/sub-b.md')
+        self.assertIn('sub-b', json.loads((self.root / 'nekogamisama' / 'suborchestrators.json').read_text()))
+        self.assertEqual([m['name'] for m in self.reg.admin_overview()['misplaced'] if m['name'] != 'azure-x'], [])
+        # 名前の変更でも、配下のファイルが付いてくる
+        self.reg.update(a['id'], {'parent_id': neko['id'], 'name': 'sub-a2'})
+        self.reg.update(b['id'], {'parent_id': a['id']})
+        self.assertEqual(self.reg.get(b['id'])['definition']['path'], '.claude/agents/sub-a2/sub-b.md')
+        self.reg.update(b['id'], {'name': 'sub-b2'})
+        self.assertEqual(self.reg.get(c['id'])['definition']['path'], '.claude/agents/sub-b2/work-c.md')
+        self.assertEqual([m['name'] for m in self.reg.admin_overview()['misplaced'] if m['name'] != 'azure-x'], [])
+        # 定義ファイルのないものは、入れ子にできない
+        with self.assertRaises(ValidationError):
+            self.reg.create({'kind': 'suborchestrator', 'name': 'bare', 'parent_id': a['id']})
+
+    def test_python_and_input_nodes(self):
+        """Python ノード（関数のコード）と入力ノード（引数の既定値）。コードは実行せず検証する（ADR 0041）"""
+        code = 'def main(n: int, tags: list = None):\n    """合計"""\n    return n\n'
+        self.reg.sync_builtin('http://x')
+        py = self.reg.create_tool({'name': 'calc', 'kind': 'python', 'code': code, 'func': 'main'})
+        self.assertEqual([(p['name'], p['type'], p['required']) for p in py['params']], [('n', 'int', True), ('tags', 'list', False)])
+        self.assertEqual(py['doc'], '合計')
+        for bad in ({'code': 'def main(n): pass'}, {'code': 'def other(n: int): pass'}, {'code': 'def main(:'}):
+            with self.assertRaises(ValidationError):
+                self.reg.update_tool(py['id'], bad)
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'p2', 'kind': 'python', 'code': 'x = 1'})
+        i = self.reg.create_tool({'name': 'n-in', 'kind': 'input', 'param': 'n', 'dtype': 'int', 'value': '42'})
+        with self.assertRaises(ValidationError):
+            self.reg.create_tool({'name': 'bad-in', 'kind': 'input', 'param': 'n', 'dtype': 'int', 'value': '4.2'})
+        self.reg.update_tool(py['id'], {'input_ids': [i['id']]})
+        self.assertEqual(self.reg.list_tools()[-2]['kind'] in ('python', 'input'), True)
+        # つないだ後に、合わなくなる変更は受け付けない（入力ノード側も、Python ノード側も）
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(i['id'], {'dtype': 'str'})
+        with self.assertRaises(ValidationError):
+            self.reg.update_tool(py['id'], {'code': 'def main(m: int): pass'})
+        self.reg.update_tool(i['id'], {'value': '7'})
+        # 入力ノードは担当につなげない。Python ノードは、ディレクトリ・LLM と同じく担当につなぐ
+        ent = next(e for e in self.reg.list() if e['name'] == 'azure-x')
+        with self.assertRaises(ValidationError):
+            self.reg.update(ent['id'], {'tool_ids': [i['id']]})
+        self.reg.update(ent['id'], {'tool_ids': [py['id']]})
+        self.assertIn('mcp__py-calc__*', self._agent_text('.claude/agents/x.md'))
+        self.reg.delete_tool(i['id'])
+        self.assertEqual(next(t for t in self.reg.list_tools() if t['id'] == py['id'])['input_ids'], [])
+        self.reg.delete_tool(py['id'])
+        self.assertNotIn('py-calc', self._agent_text('.claude/agents/x.md'))
+
+    def test_nodes_on_suborchestrator_apply_to_its_delegate(self):
+        """サブオーケストレーターへの接続は、委任先（type=agent）の担当の定義ファイルに反映される（ADR 0040）"""
+        self.reg.sync_builtin('http://x')
+        neko = next(e for e in self.reg.list() if e['kind'] == 'orchestrator')
+        (self.root / 'nekogamisama').mkdir(exist_ok=True)
+        dj = self.root / 'nekogamisama' / 'suborchestrators.json'
+        dj.write_text(json.dumps({'sx': {'type': 'agent', 'agent': 'azure-x', 'description': ''}}))
+        sx = self.reg.create({'kind': 'suborchestrator', 'name': 'sx', 'parent_id': neko['id']})
+        lone = self.reg.create({'kind': 'suborchestrator', 'name': 'lone', 'parent_id': neko['id']})            # 委任先なし
+        node = self.reg.create_tool({'name': 'qwen', 'kind': 'llm', 'model': 'qwen3:8b'})
+        with self.assertRaises(ValidationError):
+            self.reg.update(lone['id'], {'tool_ids': [node['id']]})
+        self.reg.update(sx['id'], {'tool_ids': [node['id']]})
+        self.assertIn('mcp__llm-qwen__*', self._agent_text('.claude/agents/x.md'))                              # 実体（azure-x）のツールになる
+        host = next(e for e in self.reg.list() if e['name'] == 'azure-x')
+        self.assertEqual((node['id'] in host['tool_ids'], node['id'] in self.reg.get(sx['id'])['tool_ids']), (True, True))
+        # 書き込みのあるディレクトリは、ここでも確認が要る。失敗したら、定義ファイルも台帳も変わらない
+        w = self.reg.create_tool({'name': 'out', 'kind': 'directory', 'path': 'out', 'perms': {'write': True}})
+        ids = self.reg.get(sx['id'])['tool_ids'] + [w['id']]
+        with self.assertRaises(ValidationError):
+            self.reg.update(sx['id'], {'tool_ids': ids})
+        self.assertNotIn('dir-out', self._agent_text('.claude/agents/x.md'))
+        self.assertNotIn(w['id'], self.reg.get(sx['id'])['tool_ids'])
+        self.reg.update(sx['id'], {'tool_ids': ids, 'allow_dangerous': True})
+        self.assertIn('mcp__dir-out__*', self._agent_text('.claude/agents/x.md'))
+        # 外すと、定義ファイルからも消える。他の項目（元からのツール）は残る
+        self.reg.update(sx['id'], {'tool_ids': [w['id']]})
+        text = self._agent_text('.claude/agents/x.md')
+        self.assertNotIn('llm-qwen', text)
+        self.assertIn('mcp__dir-out__*', text)
+        self.assertIn('WebSearch', text)
+
     def test_create_claude_agents_and_tree(self):
         self.reg.sync_builtin('http://x')
         (self.root / 'nekogamisama').mkdir(exist_ok=True)
@@ -396,7 +571,8 @@ class RegistryTest(Base):
     def test_admin_overview(self):
         self.reg.sync_builtin('http://x')
         (self.root / 'nekogamisama').mkdir()
-        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text(json.dumps({'azure-sage': {'dir': '..'}, 'ghost': {'dir': 'g'}}))
+        (self.root / 'nekogamisama' / 'suborchestrators.json').write_text(json.dumps({'azure-sage': {'dir': '..'}, 'ghost': {'dir': 'g'},
+                                                                              'loc': {'type': 'session', 'dir': '..', 'env': {'ANTHROPIC_BASE_URL': 'http://o:1', 'ANTHROPIC_MODEL': 'qwen3:8b'}}}))
         self.reg.create({'kind': 'suborchestrator', 'name': 'unwired', 'parent_id': self.reg.list(kind='orchestrator')[0]['id']})
         ov = self.reg.admin_overview()
         self.assertEqual(ov['admin']['name'], 'nekogamisama')
@@ -404,6 +580,7 @@ class RegistryTest(Base):
         self.assertEqual((d['azure-sage']['registered'], d['azure-sage']['wired']), (True, True))
         self.assertEqual((d['unwired']['registered'], d['unwired']['wired']), (True, False))
         self.assertEqual((d['ghost']['registered'], d['ghost']['wired']), (False, True))
+        self.assertEqual((d['loc']['local_model'], d['azure-sage']['local_model']), ('qwen3:8b', None))   # ローカル LLM の委任先は、Claude のモデルではなく、そのモデル名を出す
 
     def test_docker_runtime_validation(self):
         base = {'kind': 'orchestrator', 'name': 'd'}

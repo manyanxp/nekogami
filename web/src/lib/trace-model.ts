@@ -47,8 +47,8 @@ export function reduce(t: Trace, ev: TraceEvent): LogLine | null {
       else if (!sub) t.orch.cur = '';
       return ev.event === 'PostToolUseFailure' ? { cls: 'fail', ts: ev.ts, who, sub, text: `${ev.toolName} が失敗` } : null;
     }
-    case 'SubagentStart': ensure(t, ev.agentType || '(不明)').subStarts += 1; return { cls: 'start', ts: ev.ts, who: ev.agentType || '(不明)', sub: true, text: `▶ 開始${ev.prompt ? `: ${ev.prompt}` : ''}` };
-    case 'SubagentStop': ensure(t, ev.agentType || '(不明)').subStops += 1; return { cls: 'stop', ts: ev.ts, who: ev.agentType || '(不明)', sub: true, text: `■ 完了${ev.message ? `: ${ev.message}` : ''}` };
+    case 'SubagentStart': ensure(t, ev.agentType || '(不明)').subStarts += 1; return { cls: 'start', ts: ev.ts, who: ev.agentType || '(不明)', sub: true, text: `▶ ${ev.auto ? '自動作成して開始' : '開始'}${ev.prompt ? `: ${ev.prompt}` : ''}` };
+    case 'SubagentStop': ensure(t, ev.agentType || '(不明)').subStops += 1; return { cls: 'stop', ts: ev.ts, who: ev.agentType || '(不明)', sub: true, text: `■ ${ev.auto ? '完了（自動作成の担当を削除）' : '完了'}${ev.message ? `: ${ev.message}` : ''}` };
     case 'Stop':
       if (sub) return null;
       t.orch.state = 'done'; t.orch.cur = '';

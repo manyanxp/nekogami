@@ -35,5 +35,10 @@
       "--max-turns",
       "8"
     ]
+  },
+  "ichikishima-himeno-kami": {
+    "type": "agent",
+    "agent": "ichikishima-himeno-kami",
+    "description": "データ分析を行うエージェント。猫神さまの指示で動く。"
   }
 }

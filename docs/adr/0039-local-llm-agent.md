@@ -35,4 +35,5 @@ rev1 の要求: Docker で動くローカル LLM を、Claude Code の Haiku の
 - **WSL2 の注意**: WSL に割り当てられた RAM は、PC の 32GB ではなく 15GB だった（`free`）。GPU に載る 8B なら足りるが、CPU に溢れる大きなモデルを使うなら、`.wslconfig` の `memory` を増やす。
 - Ollama を起動していないと、`local-llm` の呼び出しは接続エラーになる。
 - モデルの精度・日本語の質は、Claude より落ちる。重要な判断には使わない。
+- 後の追加: ローカル LLM を、担当へつなぐ「LLM ノード」にした（[0040](0040-llm-node.md)）。この別セッション型は、ファイルの読み取りが要るときのために残す。
 - 関連: [0011](0011-nekogamisama-hierarchy-and-delegation.md)、[0017](0017-suborchestrator-as-agent-definition.md)、[0038](0038-python-execution-sandbox.md)

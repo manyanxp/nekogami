@@ -23,7 +23,7 @@
 | `news-sub/` | `news-agent` | 日経・海外のニュース収集（AI 関連） |
 | `nekogamisama/` | `py-analyst` | Python のコードを書いて実行し、データを分析する。管理ページで「Python 実行」を許したディレクトリのノードをつなぐと使える。ネットワークなし、30 秒まで。[ADR 0038](docs/adr/0038-python-execution-sandbox.md) |
 
-階層は 猫神さま → サブオーケストレーター → エージェント（3 層まで）。配置の規則は `.claude/agents/<親の名前>/<名前>.md`（[ADR 0016](docs/adr/0016-agent-definition-files.md)）。
+階層は 猫神さま → サブオーケストレーター → エージェント。サブオーケストレーターは入れ子にでき、全体で 4 階層まで（[ADR 0042](docs/adr/0042-nested-suborchestrators.md)）。配置の規則は `.claude/agents/<親の名前>/<名前>.md`（[ADR 0016](docs/adr/0016-agent-definition-files.md)）。
 
 ## 委任のしかた
 

@@ -8,19 +8,27 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .definitions import DefinitionError, DefinitionStore, entry_node, merge_tools
+from .definitions import DefinitionError, DefinitionStore, entry_node, merge_tools, node_entry
 from .icons import IconError, IconStore
+from .pynodes import MAX_VALUE, PY_TYPES, binding_errors, IDENT_RE, parse_function, parse_input
 
 KINDS = ('orchestrator', 'suborchestrator', 'agent', 'subagent')
-# 親にできる種別。orchestrator（猫神さま）は親なし。suborchestrator は orchestrator の直下
+# 親にできる種別。orchestrator（猫神さま）は親なし。suborchestrator は orchestrator か、別の suborchestrator の下（入れ子。ADR 0042）
+MAX_DEPTH = 4   # 猫神さまを 0 として、ツリーの深さの上限。実行時の CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH と合わせる
 PARENT_KINDS = {
     'orchestrator': (),
-    'suborchestrator': ('orchestrator',),
+    'suborchestrator': ('orchestrator', 'suborchestrator'),
     'agent': ('orchestrator', 'suborchestrator'),
     'subagent': ('agent', 'suborchestrator', 'orchestrator'),
 }
 RUNTIME_TYPES = ('builtin', 'docker', 'external')
-TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory')
+TOOL_KINDS = ('builtin', 'mcp', 'custom', 'directory', 'llm', 'python', 'input')
+SPAWN_ENTRY = 'mcp__neko-spawn__*'   # 担当の自動作成（Agent Console のツール。ADR 0043）。サブオーケストレーターのスイッチで tools に入る
+NODE_TOOL_KINDS = ('directory', 'llm', 'python')   # Agent Console がプロセス内の MCP サーバーとして公開するノード。定義ファイルのある担当にだけつなげる
+# LLM ノード（ローカル LLM。ADR 0040）の設定。モデル名は Ollama のもの
+LLM_MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$')
+LLM_MAX_PROMPT = 8000
+LLM_DEFAULTS = {'temperature': 0.7, 'max_tokens': 1024}
 # session 型の委任先に持たせられる env と args（ADR 0039）。nekogamisama/bin/delegate.sh の許可リストと同じ規則
 SESSION_ENV_KEYS = frozenset({'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
                               'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL',
@@ -118,6 +126,72 @@ def _clean_dir_path(path):
     return '/'.join(parts)
 
 
+def _clean_llm_fields(data, base=None):
+    """LLM ノードの model / prompt（システムプロンプト）/ temperature / max_tokens を検証する。base があれば、指定のない項目は base の値を保つ。"""
+    out = dict(base or {})
+    if 'model' in data or not base:
+        model = str(data.get('model') or '').strip()
+        if not LLM_MODEL_RE.match(model):
+            raise ValidationError('model は Ollama のモデル名（例: qwen3:8b）。英数字と . _ : / - のみ')
+        out['model'] = model
+    if 'prompt' in data or not base:
+        prompt = data.get('prompt') or ''
+        if not isinstance(prompt, str) or len(prompt) > LLM_MAX_PROMPT:
+            raise ValidationError(f'プロンプトは文字列で、{LLM_MAX_PROMPT} 文字まで')
+        out['prompt'] = prompt
+    if 'temperature' in data or not base:
+        t = data.get('temperature', LLM_DEFAULTS['temperature'])
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t <= 2:
+            raise ValidationError('temperature は 0〜2 の数')
+        out['temperature'] = float(t)
+    if 'max_tokens' in data or not base:
+        m = data.get('max_tokens', LLM_DEFAULTS['max_tokens'])
+        if isinstance(m, bool) or not isinstance(m, int) or not 16 <= m <= 4096:
+            raise ValidationError('max_tokens は 16〜4096 の整数')
+        out['max_tokens'] = m
+    return out
+
+
+def _clean_py_fields(data, base=None):
+    """Python ノードの code / func を検証し、引数（params）と説明（doc）を読み取る。コードは実行しない（ADR 0041）"""
+    out = dict(base or {})
+    if 'code' in data or 'func' in data or not base:
+        code = data.get('code', out.get('code'))
+        func = str(data.get('func', out.get('func', 'main')) or '').strip()
+        try:
+            info = parse_function(code, func)
+        except ValueError as e:
+            raise ValidationError(str(e))
+        out.update(code=code, func=func, params=info['params'], doc=info['doc'])
+    return out
+
+
+def _clean_input_fields(data, base=None):
+    """入力ノードの param（引数名）/ dtype（データ型）/ value（値の文字列）を検証する。値は型に従って読めなければならない"""
+    out = dict(base or {})
+    if 'param' in data or not base:
+        param = str(data.get('param') or '').strip()
+        if not IDENT_RE.match(param):
+            raise ValidationError('param（引数名）は、英数字と _ からなる Python の名前')
+        out['param'] = param
+    if 'dtype' in data or not base:
+        dtype = data.get('dtype', 'str')
+        if dtype not in PY_TYPES:
+            raise ValidationError(f'dtype は {PY_TYPES} のいずれか')
+        out['dtype'] = dtype
+    if 'value' in data or not base:
+        value = data.get('value', '')
+        value = '' if value is None else value
+        if not isinstance(value, str) or len(value) > MAX_VALUE:
+            raise ValidationError(f'value は文字列で、{MAX_VALUE} 文字まで')
+        out['value'] = value
+    try:
+        out['parsed'] = parse_input(out['dtype'], out['value'])   # 実行側（Agent Console）が読む、型に従った値
+    except ValueError as e:
+        raise ValidationError(str(e))
+    return out
+
+
 def _clean_dir_perms(perms):
     """権限。既定はすべてオフ。指定のないものはオフ"""
     if perms is None:
@@ -158,6 +232,8 @@ class Registry:
         self._tools = {t['id']: t for t in data.get('tools', [])}
         for e in data.get('entities', []):
             e.setdefault('tool_ids', [])
+            e.setdefault('callee_ids', [])
+            e.setdefault('auto_spawn', False)
             e.setdefault('definition', None)
             e.setdefault('pos', None)
             e.setdefault('protected', False)
@@ -194,6 +270,45 @@ class Registry:
         with self._lock:
             return [e['name'] for e in self._items.values() if e.get('icon') == ref]
 
+    def _depth(self, eid):
+        """猫神さま（親なし）を 0 とした深さ"""
+        n, cur = 0, self._items.get(eid)
+        while cur and cur.get('parent_id') in self._items and n < 100:
+            cur = self._items[cur['parent_id']]
+            n += 1
+        return n
+
+    def _height(self, eid):
+        """eid の配下の、いちばん深い子までの段数（子がなければ 0）"""
+        kids = self.children(eid)
+        return 1 + max(self._height(k['id']) for k in kids) if kids else 0
+
+    def _check_tree(self, kind, parent, current):
+        """親の付け方の検査: 循環、深さの上限、サブオーケストレーターの入れ子の条件（ADR 0042）"""
+        if current:
+            p = parent
+            while p:
+                if p['id'] == current['id']:
+                    raise ValidationError('子孫を親にはできない（循環）')
+                p = self._items.get(p.get('parent_id'))
+        below = self._height(current['id']) if current else 0
+        if self._depth(parent['id']) + 1 + below > MAX_DEPTH:
+            raise ValidationError(f'ツリーは {MAX_DEPTH} 階層まで（猫神さまの下を 1 とする）')
+        if kind == 'suborchestrator' and parent['kind'] == 'suborchestrator':
+            for who, e in (('親', parent), ('子', current)):
+                if e and (e.get('definition') or {}).get('kind') != 'agent-md':
+                    raise ValidationError(f'サブオーケストレーターを入れ子にできるのは、定義ファイル（.claude/agents/）のあるものだけ: {who} {e["name"]}')
+            try:
+                tools = self.defs.read(parent['definition'])['tools']
+            except (DefinitionError, OSError) as ex:
+                raise ValidationError(f'親の定義ファイルを読めない: {ex}')
+            if tools is not None and not any(t.split('(')[0] == 'Agent' for t in tools):
+                raise ValidationError(f'親 {parent["name"]} の tools に Agent がない（配下を呼べない）。先に Agent を足してほしい')
+
+    def _is_top(self, e):
+        """猫神さま直下のサブオーケストレーター（委任先一覧に載せる対象）"""
+        return e['kind'] == 'suborchestrator' and (self._items.get(e.get('parent_id')) or {}).get('kind') == 'orchestrator'
+
     def children(self, eid):
         return [e for e in self._items.values() if e.get('parent_id') == eid]
 
@@ -227,6 +342,8 @@ class Registry:
                 raise ValidationError(f'{kind} の親は {PARENT_KINDS[kind]} のいずれかを指定する')
             if current and parent_id == current['id']:
                 raise ValidationError('自分自身を親にできない')
+            if not current or parent_id != current.get('parent_id'):   # 親を付ける・付け替えるときだけ
+                self._check_tree(kind, parent, current)
         tags = data.get('tags') or []
         if not isinstance(tags, list) or not all(isinstance(t, str) and len(t) <= 32 for t in tags):
             raise ValidationError('tags は文字列の配列')
@@ -237,6 +354,8 @@ class Registry:
         return {
             'icon': icon,
             'tool_ids': self._clean_tool_ids(data.get('tool_ids')),
+            'callee_ids': self._clean_callee_ids(data.get('callee_ids'), current, kind),
+            'auto_spawn': self._clean_auto_spawn(data.get('auto_spawn'), kind),
             'pos': _clean_pos(data.get('pos')),
             'kind': kind, 'name': name, 'parent_id': parent_id,
             'description': str(data.get('description') or '')[:500],
@@ -246,6 +365,40 @@ class Registry:
             'runtime': _clean_runtime(data.get('runtime'), self.project_dir),
         }
 
+    def _clean_callee_ids(self, ids, current, kind):
+        """呼べる担当（担当 → 担当の接続。ADR 0043）。自分自身・猫神さま・呼び合いの輪（循環）は不可"""
+        ids = ids or []
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise ValidationError('callee_ids は担当の ID の配列')
+        ids = list(dict.fromkeys(ids))
+        for i in ids:
+            t = self._items.get(i)
+            if t is None:
+                raise ValidationError(f'未登録の担当: {i}')
+            if t['kind'] == 'orchestrator':
+                raise ValidationError('猫神さまは、ほかの担当から呼べない')
+            if current and i == current['id']:
+                raise ValidationError('自分自身は呼べない')
+        if current and ids and kind == 'orchestrator':
+            raise ValidationError('猫神さまの呼び先は、委任先一覧で管理する')
+        if current:
+            seen, stack = set(), list(ids)
+            while stack:   # 呼び先をたどって、自分に戻ってくるなら輪になる（無限に呼び合う）
+                n = stack.pop()
+                if n == current['id']:
+                    raise ValidationError('呼び合いの輪になるので、つなげない')
+                if n not in seen:
+                    seen.add(n)
+                    stack += (self._items.get(n) or {}).get('callee_ids', [])
+        return ids
+
+    @staticmethod
+    def _clean_auto_spawn(value, kind):
+        value = bool(value)
+        if value and kind != 'suborchestrator':
+            raise ValidationError('担当の自動作成を許せるのは、サブオーケストレーターだけ')
+        return value
+
     def _clean_tool_ids(self, ids):
         ids = ids or []
         if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
@@ -253,11 +406,16 @@ class Registry:
         unknown = [i for i in ids if i not in self._tools]
         if unknown:
             raise ValidationError(f'未登録のツール: {unknown[0]}')
+        inputs = [self._tools[i]['name'] for i in ids if self._tools[i]['kind'] == 'input']
+        if inputs:
+            raise ValidationError(f'入力ノードは担当にはつなげない（Python ノードにつなぐ）: {", ".join(inputs)}')
         return list(dict.fromkeys(ids))
 
     def create(self, data, eid=None, protected=False, definition=None):
         with self._lock:
             body = self._validate(data)
+            if body['kind'] == 'suborchestrator' and (self._items.get(body['parent_id']) or {}).get('kind') == 'suborchestrator' and not definition:
+                raise ValidationError('入れ子のサブオーケストレーターには、定義ファイルが要る（定義ファイルつきで作る）')
             eid = eid or str(uuid.uuid4())
             e = {'id': eid, **body, 'protected': protected, 'definition': definition, 'created_at': _now(), 'updated_at': _now()}
             self._items[eid] = e
@@ -273,9 +431,20 @@ class Registry:
             if body['name'] != cur['name']:
                 self._rename(cur, body['name'])           # 定義ファイル・配下のフォルダ・委任先一覧の名前も合わせる
                 cur = self.get(eid)
+            self._check_node_connections(cur, body)
+            if (body['auto_spawn'] != cur.get('auto_spawn', False) or set(body['callee_ids']) - set(cur.get('callee_ids', []))) \
+                    and (cur.get('definition') or {}).get('kind') != 'agent-md':
+                raise ValidationError(f'{cur["name"]} は定義ファイル（.claude/agents/）がないので、担当を呼ぶ接続と自動作成のスイッチは使えない')
             definition = self._apply_definition(cur, body, allow) if cur.get('definition') else cur.get('definition')
+            try:
+                self._apply_host_nodes(cur, body, allow)
+            except DefinitionError as ex:
+                raise ValidationError(str(ex))
             e = {**cur, **body, 'definition': definition, 'updated_at': _now()}
+            was_top = self._is_top(cur)
             self._items[eid] = e
+            if cur['kind'] == 'suborchestrator' and was_top != self._is_top(e) and (definition or {}).get('kind') == 'agent-md':
+                self._delegate_entry(e['name'], e['description'], remove=was_top)   # 入れ子になったら委任先から外し、猫神さま直下に戻ったら載せる
             self._save()
             return dict(e)
 
@@ -294,10 +463,13 @@ class Registry:
             if any(self._items[i].get('protected') for i in ids):
                 raise Forbidden('猫神さま（管理者エージェント）は削除できない')
             for i in ids:
+                for o in self._items.values():   # 消した担当への「呼ぶ」接続も外す
+                    if i in o.get('callee_ids', []):
+                        o['callee_ids'] = [c for c in o['callee_ids'] if c != i]
                 e = self._items.pop(i, None)
                 if e and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self.defs.discard(e['definition']['path'])        # 削除ではなく trash へ移す
-                if e and e['kind'] == 'suborchestrator' and (e.get('definition') or {}).get('kind') == 'agent-md':
+                if e and self._is_top(e) and (e.get('definition') or {}).get('kind') == 'agent-md':
                     self._delegate_entry(e['name'], remove=True)   # 定義ファイルごと消えるものだけ。台帳だけを外すときは委任設定を残す
             self._save()
             return ids
@@ -315,8 +487,8 @@ class Registry:
             kind = data.get('kind') or 'custom'
             if kind not in TOOL_KINDS:
                 raise ValidationError(f'kind は {TOOL_KINDS} のいずれか')
-            if kind == 'directory' and not DIR_NAME_RE.match(name):
-                raise ValidationError('ディレクトリの名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
+            if kind in NODE_TOOL_KINDS + ('input',) and not DIR_NAME_RE.match(name):
+                raise ValidationError('ディレクトリ・LLM・Python・入力の名前は英数字とハイフンだけ（先頭は英数字、40 文字以内）')
             if any(t['name'] == name for t in self._tools.values()):
                 raise ValidationError(f'ツール "{name}" は既に使われている')
             tid = tid or str(uuid.uuid4())
@@ -325,6 +497,13 @@ class Registry:
             if kind == 'directory':
                 t['path'] = _clean_dir_path(data.get('path'))
                 t['perms'] = _clean_dir_perms(data.get('perms'))
+            if kind == 'llm':
+                t.update(_clean_llm_fields(data))
+            if kind == 'python':
+                t.update(_clean_py_fields(data))
+                t['input_ids'] = []
+            if kind == 'input':
+                t.update(_clean_input_fields(data))
             self._tools[tid] = t
             self._save()
             return dict(t)
@@ -344,16 +523,49 @@ class Registry:
                     self._tools[tid]['perms'] = _clean_dir_perms(patch['perms'])
             elif 'path' in patch or 'perms' in patch:
                 raise ValidationError('path と perms を持てるのは、ディレクトリのノードだけ')
+            if self._tools[tid]['kind'] == 'llm':   # モデル・プロンプト・温度・出力上限は、LLM ノードだけ
+                self._tools[tid].update(_clean_llm_fields(patch, base=self._tools[tid]))
+            elif any(k in patch for k in ('model', 'prompt', 'temperature', 'max_tokens')):
+                raise ValidationError('model・prompt・temperature・max_tokens を持てるのは、LLM ノードだけ')
+            kind = self._tools[tid]['kind']
+            if kind == 'python':   # コード・関数名。つないでいる入力ノードと合わなくなる変更は、受け付けない
+                new = _clean_py_fields(patch, base=self._tools[tid])
+                if 'input_ids' in patch:
+                    new['input_ids'] = self._clean_input_ids(patch['input_ids'])
+                self._check_bindings(new, [self._tools[i] for i in new.get('input_ids', [])])
+                self._tools[tid].update(new)
+            elif kind == 'input':   # 値・型・引数名。つなぎ先の Python ノードと合わなくなる変更は、受け付けない
+                new = _clean_input_fields(patch, base=self._tools[tid])
+                for p in self._tools.values():
+                    if p['kind'] == 'python' and tid in p.get('input_ids', []):
+                        self._check_bindings(p, [new if i == tid else self._tools[i] for i in p['input_ids']])
+                self._tools[tid].update(new)
+            elif any(k in patch for k in ('code', 'func', 'input_ids', 'param', 'dtype', 'value')):
+                raise ValidationError('code・func・input_ids は Python ノード、param・dtype・value は入力ノードだけが持てる')
             self._save()
             return dict(self._tools[tid])
+
+    def _clean_input_ids(self, ids):
+        if not isinstance(ids, list) or not all(isinstance(i, str) and self._tools.get(i, {}).get('kind') == 'input' for i in ids):
+            raise ValidationError('input_ids は、入力ノードの ID の配列')
+        return list(dict.fromkeys(ids))
+
+    @staticmethod
+    def _check_bindings(py, inputs):
+        errors = binding_errors(py.get('params', []), inputs)
+        if errors:
+            raise ValidationError(f'Python ノード {py["name"]} と入力ノードが合わない: ' + '; '.join(errors))
 
     def delete_tool(self, tid):
         with self._lock:
             if tid not in self._tools:
                 raise NotFound(tid)
-            if self._tools[tid]['kind'] == 'directory':
+            if self._tools[tid]['kind'] in NODE_TOOL_KINDS:
                 self._detach_directory(self._tools[tid]['name'])
             del self._tools[tid]
+            for t in self._tools.values():   # 消した入力ノードは、Python ノードの入力から外す
+                if tid in t.get('input_ids', []):
+                    t['input_ids'] = [i for i in t['input_ids'] if i != tid]
             for e in self._items.values():
                 if tid in e['tool_ids']:
                     e['tool_ids'] = [i for i in e['tool_ids'] if i != tid]
@@ -400,10 +612,70 @@ class Registry:
         return list(dict.fromkeys(by_name[n] for n in (entry_node(x) for x in (entries or [])) if n in by_name))
 
     def _group_for(self, body, name):
-        """定義ファイルを置くフォルダ名。サブオーケストレーターは自分の名前、それ以外は親の名前。"""
-        if body['kind'] == 'suborchestrator':
+        """定義ファイルを置くフォルダ名。猫神さま直下のサブオーケストレーターは自分の名前、それ以外は親の名前
+        （入れ子のサブオーケストレーターも親のフォルダに置く。自分の配下は、自分の名前のフォルダ）。"""
+        parent = self._items.get(body.get('parent_id')) or {}
+        if body['kind'] == 'suborchestrator' and parent.get('kind') != 'suborchestrator':
             return name
-        return self._items[body['parent_id']]['name']
+        return parent['name']
+
+    def _node_host(self, cur):
+        """ディレクトリ・LLM のノードのツール（定義ファイルの tools）を書き込む先の担当。
+        - エージェント定義（.claude/agents/）のある担当は、自分自身。
+        - サブオーケストレーターは、委任先（suborchestrators.json で type=agent のもの）の担当。`azure-sage` と話すとき、実際に動くのは委任先の
+          `azure-architect` なので、サブオーケストレーターへの接続は、そのツールになる（ADR 0040）。
+        - 猫神さま（CLAUDE.md）や、委任先のない担当は None（つないでも実行時に効かない）。"""
+        if (cur.get('definition') or {}).get('kind') == 'agent-md':
+            return cur
+        if cur['kind'] != 'suborchestrator':
+            return None
+        try:
+            entry = self._delegate_read().get(cur['name']) or {}
+        except ValidationError:
+            return None
+        if entry.get('type') != 'agent':
+            return None
+        host = next((x for x in self._items.values() if x['name'] == entry.get('agent') and (x.get('definition') or {}).get('kind') == 'agent-md'), None)
+        return host
+
+    def _node_changes(self, cur, body):
+        """今回の変更で、新しくつなぐノードと、外すノード（ディレクトリ・LLM だけ）"""
+        added = [self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools and self._tools[i]['kind'] in NODE_TOOL_KINDS]
+        removed = [self._tools[i] for i in set(cur['tool_ids']) - set(body['tool_ids']) if i in self._tools and self._tools[i]['kind'] in NODE_TOOL_KINDS]
+        return added, removed
+
+    def _check_node_connections(self, cur, body):
+        """ディレクトリ・LLM のノードを新しくつなげるのは、ツールを書ける担当（上の `_node_host`）だけ。
+        猫神さまや定義のない担当につないでも、実行時には何も効かないので、黙って受け付けない。"""
+        added, _ = self._node_changes(cur, body)
+        if added and self._node_host(cur) is None:
+            raise ValidationError(f'{cur["name"]} は、ツールを書ける定義ファイル（.claude/agents/）も、委任先のエージェントも持たないので、ノードをつなげない: {", ".join(sorted(t["name"] for t in added))}')
+
+    def _apply_host_nodes(self, cur, body, allow_dangerous):
+        """サブオーケストレーターへの接続を、委任先の担当の定義ファイルに反映する（自分の定義には tools がないため）。"""
+        host = self._node_host(cur)
+        if host is None or host['id'] == cur['id']:
+            return
+        added, removed = self._node_changes(cur, body)
+        if not added and not removed:
+            return
+        self._check_risky(added, allow_dangerous)
+        d = dict(host['definition'])
+        try:
+            tools = [t for t in (self.defs.read(d)['tools'] or []) if entry_node(t) not in {r['name'] for r in removed}]
+            have = {entry_node(t) for t in tools}
+            tools += [node_entry(t['name'], t['kind']) for t in added if t['name'] not in have]
+            self.defs.write(d, tools=tools)
+        except DefinitionError as ex:
+            raise ValidationError(str(ex))
+        ids = [i for i in host['tool_ids'] if i not in {r['id'] for r in removed}] + [t['id'] for t in added if t['id'] not in host['tool_ids']]
+        self._items[host['id']] = {**host, 'tool_ids': ids, 'updated_at': _now()}
+
+    @staticmethod
+    def _check_risky(added, allow_dangerous):
+        risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in DIR_RISKY_PERMS))
+        if risky and not allow_dangerous:
+            raise DefinitionError(f'書き込み・削除・Python 実行ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
 
     def _apply_definition(self, cur, body, allow_dangerous):
         """エンティティの変更を定義ファイルへ反映する（台帳を保存する前に呼ぶ。失敗したら台帳も変えない）。"""
@@ -415,14 +687,12 @@ class Registry:
                 return d
             tools = None
             if body['tool_ids'] != cur['tool_ids']:
-                added = [self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools]
-                risky = sorted(t['name'] for t in added if t['kind'] == 'directory' and any((t.get('perms') or {}).get(k) for k in DIR_RISKY_PERMS))
-                if risky and not allow_dangerous:
-                    raise DefinitionError(f'書き込み・削除・Python 実行ができるディレクトリを新しく足すには確認が必要: {", ".join(risky)}')
+                self._check_risky([self._tools[i] for i in set(body['tool_ids']) - set(cur['tool_ids']) if i in self._tools], allow_dangerous)
                 current = self.defs.read(d)['tools'] or []
                 tools = merge_tools(current, self._tool_names(body['tool_ids']), self._catalog())
+            tools = self._apply_calls(d, cur, body, tools)
             self.defs._check(body['description'], body['model'], tools)
-            if body['kind'] != 'suborchestrator' and body['parent_id'] != cur['parent_id']:
+            if body['parent_id'] != cur['parent_id']:
                 d['path'] = self.defs.move(d['path'], self._group_for(body, body['name']))
             self.defs.write(d, description=body['description'] if body['description'] != cur['description'] else None,
                             model=body['model'] if body['model'] != cur['model'] else None,
@@ -430,6 +700,24 @@ class Registry:
             return d
         except DefinitionError as e:
             raise ValidationError(str(e))
+
+    def _apply_calls(self, d, cur, body, tools):
+        """自動作成のスイッチ（mcp__neko-spawn__*）と、担当を呼ぶ接続（Agent ツール）を、定義の tools に反映する。変更がなければ tools をそのまま返す"""
+        spawn_changed = body['auto_spawn'] != cur.get('auto_spawn', False)
+        added_callee = bool(set(body['callee_ids']) - set(cur.get('callee_ids', [])))
+        if not spawn_changed and not added_callee:
+            return tools
+        base = tools if tools is not None else self.defs.read(d)['tools']
+        if base is None:        # tools の指定がない = 全ツールを継承。足さなくても使える
+            return tools
+        out = list(base)
+        if spawn_changed:
+            out = [t for t in out if t != SPAWN_ENTRY]
+            if body['auto_spawn']:
+                out.append(SPAWN_ENTRY)
+        if added_callee and not any(t.split('(')[0] == 'Agent' for t in out):
+            out.insert(0, 'Agent')   # 呼ぶには Agent ツールが要る
+        return out
 
     def _rename(self, cur, new):
         """名前の変更に伴うファイル操作。先にぶつかりを全部調べてから動かす。台帳（_items）は、定義のパスと名前だけを更新する。"""
@@ -444,7 +732,7 @@ class Registry:
         try:
             own_new = None
             if d and d['kind'] == 'agent-md':
-                group = new if cur['kind'] == 'suborchestrator' else self._items[cur['parent_id']]['name']
+                group = self._group_for(cur, new)
                 own_new = self.defs.agent_path(group, new)
                 if own_new != d['path'] and self.defs.exists(own_new):
                     raise DefinitionError(f'{own_new} は既にある')
@@ -508,7 +796,7 @@ class Registry:
             e = {'id': eid, **body, 'description': body['description'] or name, 'protected': False,
                  'definition': {'kind': 'agent-md', 'path': rel}, 'created_at': _now(), 'updated_at': _now()}
             self._items[eid] = e
-            if kind == 'suborchestrator':
+            if self._is_top(e):
                 self._delegate_entry(name, e['description'])
             self._save()
             return dict(e)
@@ -619,7 +907,7 @@ class Registry:
         """猫神さま（保護されたエンティティ）の状態と、委任先設定（suborchestrators.json）・定義ファイルと台帳の突き合わせ。"""
         with self._lock:
             neko = next((dict(e) for e in self._items.values() if e.get('protected')), None)
-            subs = {e['name']: dict(e) for e in self._items.values() if e['kind'] == 'suborchestrator'}
+            subs = {e['name']: dict(e) for e in self._items.values() if self._is_top(e)}   # 委任先に載るのは、猫神さま直下だけ
             count = {k: sum(1 for e in self._items.values() if e['kind'] == k) for k in KINDS}
             for e in subs.values():
                 e['children'] = sum(1 for c in self._items.values() if c.get('parent_id') == e['id'])
@@ -632,7 +920,7 @@ class Registry:
                     missing.append({'id': e['id'], 'name': e['name'], 'path': d['path']})
                     continue
                 parts = d['path'].split('/')
-                want = e['name'] if e['kind'] == 'suborchestrator' else (self._items.get(e['parent_id']) or {}).get('name')
+                want = e['name'] if self._is_top(e) else (self._items.get(e['parent_id']) or {}).get('name')
                 if want and (len(parts) != 4 or parts[2] != want):
                     misplaced.append({'id': e['id'], 'name': e['name'], 'path': d['path'], 'expected': f'.claude/agents/{want}/{e["name"]}.md'})
         try:
@@ -642,10 +930,17 @@ class Registry:
         delegation = [{'name': n, 'registered': n in subs, 'wired': n in wired, 'type': (wired.get(n) or {}).get('type', 'session'),
                        'dir': (wired.get(n) or {}).get('dir'), 'agent': (wired.get(n) or {}).get('agent'),
                        'description': (wired.get(n) or {}).get('description', ''), 'entity_id': subs.get(n, {}).get('id'),
-                       'entity': self._entity_brief(subs.get(n)), 'target': self._target_brief((wired.get(n) or {}).get('agent'))}
+                       'entity': self._entity_brief(subs.get(n)), 'target': self._target_brief((wired.get(n) or {}).get('agent')),
+                       'local_model': self._local_model(wired.get(n))}
                       for n in sorted(set(subs) | set(wired))]
         return {'admin': neko, 'counts': count, 'tools': len(self._tools), 'delegation': delegation,
                 'misplaced': misplaced, 'missing': missing}
+
+    @staticmethod
+    def _local_model(entry):
+        """session 型で、ローカル LLM（ANTHROPIC_BASE_URL を差し替えたもの）を使う委任先の、モデル名。画面は Claude のモデルの代わりにこれを出す。"""
+        env = (entry or {}).get('env') or {}
+        return (env.get('ANTHROPIC_MODEL') or env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL') or 'ローカル LLM') if env.get('ANTHROPIC_BASE_URL') else None
 
     @staticmethod
     def _entity_brief(e):
@@ -708,7 +1003,7 @@ class Registry:
                     except ValidationError:
                         continue      # 1 つの不正な定義で同期全体を止めない
                 ent = next(e for e in self._items.values() if e['name'] == a['name'])
-                if ent['kind'] == 'suborchestrator':
+                if self._is_top(ent):
                     self._delegate_entry(ent['name'], ent['description'])
             self._save()
         return created
@@ -723,6 +1018,10 @@ class Registry:
         name, group = a['name'], a['group']
         if a['role'] == 'suborchestrator':
             kind, parent = 'suborchestrator', neko_id
+            outer = next((e for e in self._items.values() if e['name'] == group and e['kind'] == 'suborchestrator' and group != name
+                          and (e.get('definition') or {}).get('kind') == 'agent-md'), None)
+            if outer:   # 別のサブオーケストレーターのフォルダにある。入れ子（ADR 0042）
+                parent = outer['id']
         else:
             parent = next((e['id'] for e in self._items.values() if e['name'] == group and e['kind'] in ('orchestrator', 'suborchestrator', 'agent')), None) \
                 if group else root_id

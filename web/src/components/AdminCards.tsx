@@ -2,10 +2,10 @@
 // 管理ページ左の列のカード（テーマ・性格・猫神さま・委任先・選択中）
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { DANGEROUS_TOOLS, DIR_PERMS, RISKY_DIR_PERMS, modelOptions } from '@/lib/graph-model';
+import { DANGEROUS_TOOLS, DIR_PERMS, PY_TYPES, RISKY_DIR_PERMS, modelOptions } from '@/lib/graph-model';
 import { KIND_LABEL } from '@/lib/model';
 import { DEFAULT_THEME, PRESETS, applyTheme, saveThemeCache } from '@/lib/theme';
-import type { DelegationRow, DirPerms, Entity, EntityDefinition, Overview, Personality, Theme, Tool } from '@/lib/types';
+import type { DelegationRow, DirPerms, Entity, EntityDefinition, Overview, Personality, PyType, Theme, Tool } from '@/lib/types';
 import { useToast } from './Toast';
 import { IconPicker } from './IconPicker';
 
@@ -141,13 +141,84 @@ export function Inspector({ sel, entities, tools, guarded, reload, onRename, emb
         <div className="row"><b>モデル</b><ModelSelect value={e.model} title="モデルを変更（台帳に保存）" onChange={(v) => void guarded(async () => { await api.update(e.id, { model: v }); toast(`${e.name} のモデルを ${v || '（指定なし）'} にしました${e.definition ? '（定義ファイルを更新）' : ''}`); await reload(); })} /></div>
         <div className="row"><b>親</b>{entities.find((x) => x.id === e.parent_id)?.name || '（なし）'}</div>
         <div className="row"><b>ツール</b>{e.tool_ids.map((i) => tools.find((x) => x.id === i)?.name).filter(Boolean).join(', ') || '（なし）'}</div>
+        <div className="row"><b>呼べる担当</b>{(e.callee_ids || []).map((i) => entities.find((x) => x.id === i)?.name).filter(Boolean).join(', ') || '（なし）'}</div>
+        {e.kind === 'suborchestrator' && e.definition?.kind === 'agent-md' && (
+          <label className="spawn-switch" title="配下だけでは足りないとき、読み取り専用の一時担当をその場で作って使い、終われば消します。動きはトレースとターミナルに「自動作成/…」と出ます">
+            <input type="checkbox" checked={!!e.auto_spawn} onChange={(ev) => void guarded(async () => { await api.update(e.id, { auto_spawn: ev.target.checked }); toast(`${e.name} の担当の自動作成を${ev.target.checked ? '許可' : '禁止'}にしました（定義ファイルを更新）`); await reload(); })} />
+            足りないとき、担当を自動で作ってよい（読み取りのみ・1 回の依頼で 3 体まで）
+          </label>
+        )}
         {entities.some((x) => x.parent_id === e.id) && <p className="hint">配下 {entities.filter((x) => x.parent_id === e.id).length} 件。削除すると配下もまとめて削除します。</p>}
         {e.description && <p className="hint">{e.description}</p>}
         {e.definition ? <DefinitionPanel key={e.id} e={e} guarded={guarded} /> : <p className="hint">定義ファイルのないエンティティです（Docker などで外部管理）。プロンプトとツールは台帳では編集できません。</p>}
       </>}
       {t && <><div className="row"><span className="badge">{t.kind}</span>{t.name}</div><div className="row"><b>接続数</b>{entities.filter((x) => x.tool_ids.includes(t.id)).length}</div>{t.description && <p className="hint">{t.description}</p>}
+        {t.kind === 'llm' && <LlmPanel key={t.id} t={t} connected={entities.filter((x) => x.tool_ids.includes(t.id)).map((x) => x.name)} guarded={guarded} reload={reload} />}
+        {t.kind === 'python' && <PythonPanel key={t.id} t={t} connected={entities.filter((x) => x.tool_ids.includes(t.id)).map((x) => x.name)} inputs={(t.input_ids || []).map((i) => tools.find((x) => x.id === i)).filter((x): x is Tool => !!x)} guarded={guarded} reload={reload} />}
+        {t.kind === 'input' && <InputPanel key={t.id} t={t} usedBy={tools.filter((x) => x.input_ids?.includes(t.id)).map((x) => x.name)} guarded={guarded} reload={reload} />}
         {t.kind === 'directory' && <DirectoryPanel key={t.id} t={t} connected={entities.filter((x) => x.tool_ids.includes(t.id)).map((x) => x.name)} guarded={guarded} reload={reload} />}</>}
     </section>
+  );
+}
+
+/** LLM ノード（ローカル LLM）の編集: モデル名・プロンプト（システムプロンプト）・温度・出力の長さ。Claude のモデルは関係しない */
+function LlmPanel({ t, connected, guarded, reload }: { t: Tool; connected: string[]; guarded: <T>(fn: () => Promise<T>) => Promise<T | undefined>; reload: () => Promise<void> }) {
+  const toast = useToast();
+  const [model, setModel] = useState(t.model || ''), [prompt, setPrompt] = useState(t.prompt || '');
+  const [temp, setTemp] = useState(String(t.temperature ?? 0.7)), [maxTok, setMaxTok] = useState(String(t.max_tokens ?? 1024));
+  const dirty = model !== (t.model || '') || prompt !== (t.prompt || '') || Number(temp) !== (t.temperature ?? 0.7) || Number(maxTok) !== (t.max_tokens ?? 1024);
+  return (
+    <div className="defpanel">
+      <div className="row"><b>モデル</b><input value={model} onChange={(e) => setModel(e.target.value)} maxLength={80} aria-label="Ollama のモデル名" /></div>
+      <label>プロンプト（システムプロンプト。保存すると、次の質問から効きます）
+        <textarea className="llm-prompt prompt" rows={10} spellCheck={false} maxLength={8000} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="あなたは…です。" />
+      </label>
+      <div className="llm-params">
+        <label>温度<input type="number" min={0} max={2} step={0.1} value={temp} onChange={(e) => setTemp(e.target.value)} style={{ width: 70 }} /></label>
+        <label>出力の長さ（トークン）<input type="number" min={16} max={4096} step={16} value={maxTok} onChange={(e) => setMaxTok(e.target.value)} style={{ width: 90 }} /></label>
+      </div>
+      <p className="hint">つないである担当: {connected.join(', ') || '（なし）'}。文脈が短い（16K）ので、プロンプトは短くします。</p>
+      <button className="primary" disabled={!dirty} onClick={() => void guarded(async () => {
+        await api.updateTool(t.id, { model, prompt, temperature: Number(temp), max_tokens: Math.trunc(Number(maxTok)) }); toast(`${t.name} を保存しました`); await reload();
+      })}>保存</button>
+    </div>
+  );
+}
+
+/** Python ノードの編集: 関数のコード。引数は型注釈から読み、入力ノードの値が既定値になる（ADR 0041） */
+function PythonPanel({ t, connected, inputs, guarded, reload }: { t: Tool; connected: string[]; inputs: Tool[]; guarded: <T>(fn: () => Promise<T>) => Promise<T | undefined>; reload: () => Promise<void> }) {
+  const toast = useToast();
+  const [code, setCode] = useState(t.code || ''), [func, setFunc] = useState(t.func || 'main');
+  const dirty = code !== (t.code || '') || func !== (t.func || 'main');
+  return (
+    <div className="defpanel">
+      <div className="row"><b>関数名</b><input value={func} onChange={(e) => setFunc(e.target.value)} maxLength={64} aria-label="呼ぶ関数の名前" /></div>
+      <label>コード（引数には標準のデータ型の注釈が要る。保存すると、次の呼び出しから効きます）
+        <textarea className="llm-prompt prompt code" rows={14} spellCheck={false} maxLength={20000} value={code} onChange={(e) => setCode(e.target.value)} />
+      </label>
+      <div className="row"><b>引数</b>{(t.params || []).map((p) => `${p.name}: ${p.type}${p.required ? '' : '（省略可）'}`).join(', ') || '（なし）'}</div>
+      <div className="row"><b>入力</b>{inputs.map((i) => `${i.param}=${i.name}`).join(', ') || '（なし）'}</div>
+      <p className="hint">つないである担当: {connected.join(', ') || '（なし）'}。実行はネットワークなし・30 秒・メモリ 512 MB。入力ノードは、この Python ノードへワイヤーでつなぎます。</p>
+      <button className="primary" disabled={!dirty} onClick={() => void guarded(async () => { await api.updateTool(t.id, { code, func }); toast(`${t.name} を保存しました`); await reload(); })}>保存</button>
+    </div>
+  );
+}
+
+/** 入力ノードの編集: 引数名・データ型・値。つないである Python ノードの引数と合わない変更は、API が断る */
+function InputPanel({ t, usedBy, guarded, reload }: { t: Tool; usedBy: string[]; guarded: <T>(fn: () => Promise<T>) => Promise<T | undefined>; reload: () => Promise<void> }) {
+  const toast = useToast();
+  const [param, setParam] = useState(t.param || ''), [dtype, setDtype] = useState(t.dtype || 'str'), [value, setValue] = useState(t.value || '');
+  const dirty = param !== (t.param || '') || dtype !== (t.dtype || 'str') || value !== (t.value || '');
+  return (
+    <div className="defpanel">
+      <div className="row"><b>引数名</b><input value={param} onChange={(e) => setParam(e.target.value)} maxLength={64} aria-label="引数名" /></div>
+      <div className="row"><b>データ型</b><select value={dtype} onChange={(e) => setDtype(e.target.value as PyType)}>{PY_TYPES.map((p) => <option key={p.key} value={p.key}>{p.key}</option>)}</select></div>
+      <label>値（{PY_TYPES.find((p) => p.key === dtype)?.example}）
+        <textarea className="llm-prompt" rows={5} spellCheck={false} maxLength={4000} value={value} onChange={(e) => setValue(e.target.value)} />
+      </label>
+      <p className="hint">つなぎ先の Python ノード: {usedBy.join(', ') || '（なし）'}。担当が同じ名前の引数を渡したときは、渡した値が優先されます。</p>
+      <button className="primary" disabled={!dirty} onClick={() => void guarded(async () => { await api.updateTool(t.id, { param, dtype, value }); toast(`${t.name} を保存しました`); await reload(); })}>保存</button>
+    </div>
   );
 }
 

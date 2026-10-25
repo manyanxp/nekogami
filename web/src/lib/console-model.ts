@@ -3,6 +3,7 @@ export interface HookEvent {
   kind: 'hook'; event: string; ts: number; sessionId?: string; agentId?: string | null; agentType?: string | null; model?: string;
   toolName?: string; toolUseId?: string; input?: string; output?: string; prompt?: string; message?: string; source?: string; chat?: string | null;
   route?: { to: string; via: 'agent' | 'session'; description?: string };
+  auto?: boolean;   // 自動作成された一時の担当の動き（ADR 0043）
 }
 export interface PermissionEvent { kind: 'permission'; ts: number; toolName: string; allowed: boolean; reason: string; chat?: string | null }
 export interface SdkEvent { kind: 'sdk'; type: string; ts: number; text: string; chat?: string | null }
@@ -108,10 +109,10 @@ export function onHook(s: ConsoleStore, ev: HookEvent, ctx: Ctx) {
     }
     case 'SubagentStart':
       a.status = 'running'; a.started = ts; a.ended = null;
-      addEvent(s, { ts, who, model, kind: 'サブエージェント開始', cls: 'ag', sum: ev.agentType || '', cat: 'agent' }); break;
+      addEvent(s, { ts, who, model, kind: ev.auto ? '自動作成して開始' : 'サブエージェント開始', cls: 'ag', sum: ev.agentType || '', cat: 'agent' }); break;
     case 'SubagentStop':
       a.status = 'done'; a.ended = ts; a.cur = '';
-      addEvent(s, { ts, who, model, kind: 'サブエージェント完了', cls: 'ag', sum: oneLine(ev.message), details: [['最終メッセージ', ev.message]], cat: 'agent' }); break;
+      addEvent(s, { ts, who, model, kind: ev.auto ? '完了（自動作成の担当を削除）' : 'サブエージェント完了', cls: 'ag', sum: oneLine(ev.message), details: [['最終メッセージ', ev.message]], cat: 'agent' }); break;
     case 'Stop':
       a.status = 'idle'; a.cur = ''; a.ended = ts;
       addEvent(s, { ts, who, model, kind: '応答完了', cls: 'ag', sum: oneLine(ev.message), details: [['最終メッセージ', ev.message]], cat: 'agent' }); break;

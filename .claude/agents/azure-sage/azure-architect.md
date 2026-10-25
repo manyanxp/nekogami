@@ -4,7 +4,7 @@ description: 精査済みの Azure 調査結果（と必要なら環境棚卸し
 model: opus
 effort: high
 color: orange
-tools: mcp__microsoft-learn__microsoft_docs_search, mcp__microsoft-learn__microsoft_docs_fetch, mcp__microsoft-learn__microsoft_code_sample_search, Read, Grep, Glob, Write
+tools: mcp__microsoft-learn__microsoft_docs_search, mcp__microsoft-learn__microsoft_docs_fetch, mcp__microsoft-learn__microsoft_code_sample_search, Read, Grep, Glob, Write, mcp__llm-azure-researcher-local-llm__*
 ---
 
 あなたは Azure ソリューションアーキテクトです。Well-Architected Framework（信頼性・セキュリティ・コスト最適化・オペレーショナルエクセレンス・パフォーマンス効率）の観点で、**実行可能な提案**を作ります。

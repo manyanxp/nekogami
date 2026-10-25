@@ -42,6 +42,18 @@ describe('graph', () => {
   });
 });
 
+describe('LLM ノード（ローカル LLM）', () => {
+  const llm: Tool = { id: 'l1', name: 'qwen', kind: 'llm', pos: null, model: 'qwen3:8b', prompt: '短く', temperature: 0.7, max_tokens: 1024 };
+  it('グラフでは Claude のモデルではなく、ローカル LLM とモデル名を出し、担当と接続できる', () => {
+    const a = E('a1', 'agent', 'ag', 'o1');
+    expect(buildGraph([E('o1', 'orchestrator', 'neko'), a], [llm]).nodes.find((n) => n.id === 'l1')!.sub).toBe('ローカル LLM · qwen3:8b');
+    expect(canConnect([a], [llm], 'a1', 'l1')).toMatchObject({ ok: true, action: 'tool' });
+  });
+  it('確認が要る（危険な）接続ではない', () => {
+    expect(isRiskyDir(llm)).toBe(false);
+  });
+});
+
 describe('ディレクトリのノード', () => {
   const dir = (perms: Tool['perms']): Tool => ({ id: 'd1', name: 'docs', kind: 'directory', pos: null, path: 'notes/docs', perms });
   it('権限の表示と、危険（書き込み・削除）の判定', () => {
@@ -56,5 +68,77 @@ describe('ディレクトリのノード', () => {
     expect(g.nodes.find((n) => n.id === 'd1')!.sub).toBe('notes/docs · 参照・書き込み');
     expect(buildGraph([a], [dir({})]).nodes.find((n) => n.id === 'd1')!.sub).toBe('notes/docs · 権限なし');
     expect(canConnect([a], [dir({})], 'a1', 'd1')).toMatchObject({ ok: true, action: 'tool' });
+  });
+});
+
+describe('Python ノードと入力ノード', () => {
+  const py = (input_ids: string[] = []): Tool => ({ id: 'p1', name: 'calc', kind: 'python', pos: null, func: 'main', input_ids,
+    params: [{ name: 'n', type: 'int', required: true, default: null }, { name: 's', type: 'str', required: false, default: 'a' }] });
+  const inp = (id: string, param: string, dtype: Tool['dtype']): Tool => ({ id, name: `in-${id}`, kind: 'input', pos: null, param, dtype, value: '1' });
+  it('担当につなげる。入力ノードは担当にはつなげず、Python ノードにだけつなげる', () => {
+    const a = E('a1', 'agent', 'ag', 'o1');
+    expect(canConnect([a], [py()], 'a1', 'p1')).toMatchObject({ ok: true, action: 'tool' });
+    expect(canConnect([a], [py(), inp('i1', 'n', 'int')], 'a1', 'i1').ok).toBe(false);
+    expect(canConnect([a], [py(), inp('i1', 'n', 'int')], 'i1', 'p1')).toMatchObject({ ok: true, action: 'input' });
+    expect(canConnect([a], [py(), inp('i1', 'n', 'int')], 'i1', 'a1').ok).toBe(false);
+  });
+  it('引数名・型が合わない、同じ引数に 2 つ、は断る', () => {
+    const e: Entity[] = [];
+    expect(canConnect(e, [py(), inp('i1', 'zz', 'int')], 'i1', 'p1').ok).toBe(false);
+    expect(canConnect(e, [py(), inp('i1', 'n', 'str')], 'i1', 'p1').ok).toBe(false);
+    expect(canConnect(e, [py(['i1']), inp('i1', 'n', 'int'), inp('i2', 'n', 'int')], 'i2', 'p1').ok).toBe(false);
+  });
+  it('グラフ: 表示と、入力 → Python の線', () => {
+    const g = buildGraph([], [py(['i1']), inp('i1', 'n', 'int')]);
+    expect(g.nodes.find((n) => n.id === 'p1')!.sub).toBe('Python · main(n, s)');
+    expect(g.nodes.find((n) => n.id === 'i1')!.sub).toBe('入力 · n: int');
+    expect(g.edges).toContainEqual({ id: 'input:i1>p1', type: 'input', from: 'i1', to: 'p1' });
+  });
+});
+
+describe('サブオーケストレーターの入れ子', () => {
+  const def = { kind: 'agent-md', path: 'x' } as Entity['definition'];
+  const S = (id: string, parent: string, definition: Entity['definition'] = def): Entity => ({ ...E(id, 'suborchestrator', id, parent), definition });
+  it('サブオーケストレーターの下にサブオーケストレーターをつなげる（定義ファイルがあるものだけ）', () => {
+    const es = [E('o', 'orchestrator', 'neko'), S('a', 'o'), S('b', 'o'), S('bare', 'o', null)];
+    expect(canConnect(es, [], 'a', 'b')).toMatchObject({ ok: true, action: 'reparent' });
+    expect(canConnect(es, [], 'a', 'bare').ok).toBe(false);
+    expect(canConnect(es, [], 'bare', 'b').ok).toBe(false);
+  });
+  it('循環と、4 階層の上限は断る', () => {
+    const es = [E('o', 'orchestrator', 'neko'), S('a', 'o'), S('b', 'a'), S('c', 'b'), E('w', 'agent', 'w', 'c'), E('s', 'subagent', 's', 'o')];
+    expect(canConnect(es, [], 'c', 'a').ok).toBe(false);   // 子孫を親にする（循環）
+    expect(canConnect(es, [], 'w', 's').ok).toBe(false);   // 猫神さま → a → b → c → w → s は 5 階層
+    expect(canConnect(es, [], 'c', 's').ok).toBe(true);    // c の下なら 4 階層
+  });
+  it('親の選択肢は、深さの上限を超えるものを出さない', () => {
+    const es = [E('o', 'orchestrator', 'neko'), S('a', 'o'), S('b', 'a'), S('c', 'b')];
+    expect(parentChoices(es, 'agent').map((e) => e.id)).toEqual(['o', 'a', 'b', 'c']);
+    const more = [...es, S('d', 'c')];
+    expect(parentChoices(more, 'agent').map((e) => e.id)).not.toContain('d');   // d の下は 5 階層目
+  });
+});
+
+describe('担当 → 担当（呼ぶ）の接続', () => {
+  const def = { kind: 'agent-md', path: 'x' } as Entity['definition'];
+  const A = (id: string, callee_ids: string[] = [], definition: Entity['definition'] = def): Entity => ({ ...E(id, 'agent', id, 'o'), definition, callee_ids });
+  const pins = { source: 'call', target: 'callee' };
+  it('下のピン → 上のピンでつなげる。ピンの向きが違えば断る', () => {
+    const es = [E('o', 'orchestrator', 'neko'), A('a'), A('b')];
+    expect(canConnect(es, [], 'a', 'b', pins)).toMatchObject({ ok: true, action: 'call' });
+    expect(canConnect(es, [], 'a', 'b', { source: 'call', target: null }).ok).toBe(false);
+    expect(canConnect(es, [], 'a', 'b', { source: null, target: 'callee' }).ok).toBe(false);
+  });
+  it('自分自身・猫神さま・定義のない担当・重複・輪は断る', () => {
+    const es = [E('o', 'orchestrator', 'neko'), A('a', ['b']), A('b'), A('bare', [], null)];
+    expect(canConnect(es, [], 'a', 'a', pins).ok).toBe(false);
+    expect(canConnect(es, [], 'a', 'o', pins).ok).toBe(false);
+    expect(canConnect(es, [], 'bare', 'a', pins).ok).toBe(false);
+    expect(canConnect(es, [], 'a', 'b', pins).ok).toBe(false);          // すでに
+    expect(canConnect(es, [], 'b', 'a', pins).ok).toBe(false);          // a → b → a の輪
+  });
+  it('グラフに「呼ぶ」の線が出る', () => {
+    const g = buildGraph([E('o', 'orchestrator', 'neko'), A('a', ['b']), A('b')], []);
+    expect(g.edges).toContainEqual({ id: 'call:a>b', type: 'call', from: 'a', to: 'b' });
   });
 });

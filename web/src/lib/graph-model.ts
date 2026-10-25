@@ -1,10 +1,18 @@
 // ノードグラフ用の純粋ロジック（描画は @xyflow/react、通信は api.ts）。
 // 親子の規則はバックエンド（registry.py の PARENT_KINDS）が正。ここは操作中に即座に可否を示すための写し。
-import type { DirPerm, DirPerms, Entity, Kind, Tool } from './types';
+import type { DirPerm, DirPerms, Entity, Kind, PyType, Tool } from './types';
 
+/** Python 標準のデータ型（入力ノードで選べる）と、値の書き方の例 */
+export const PY_TYPES: { key: PyType; example: string }[] = [
+  { key: 'str', example: 'そのまま文字を書く' }, { key: 'int', example: '42' }, { key: 'float', example: '3.14' }, { key: 'bool', example: 'true / false' },
+  { key: 'list', example: '[1, 2, 3]' }, { key: 'dict', example: '{"a": 1}' }, { key: 'tuple', example: '[1, 2]（配列で書く）' }, { key: 'set', example: '[1, 2]（配列で書く）' },
+];
+export const PY_SAMPLE = 'def main(x: int, label: str = "a"):\n    """説明（1 行目が担当に見える）"""\n    return {"x2": x * 2, "label": label}\n';
+
+export const MAX_DEPTH = 4;   // ツリーの深さの上限（猫神さまを 0 とする）。バックエンドの MAX_DEPTH、実行時の CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH と同じ
 export const PARENT_KINDS: Record<Kind, Kind[]> = {
   orchestrator: [],
-  suborchestrator: ['orchestrator'],
+  suborchestrator: ['orchestrator', 'suborchestrator'],   // 入れ子にできる（ADR 0042）
   agent: ['orchestrator', 'suborchestrator'],
   subagent: ['agent', 'suborchestrator', 'orchestrator'],
 };
@@ -29,13 +37,18 @@ export const DIR_PERMS: { key: DirPerm; label: string }[] = [{ key: 'list', labe
 export const permLabels = (perms?: Partial<DirPerms>) => DIR_PERMS.filter((p) => perms?.[p.key]).map((p) => p.label);
 /** 書き込み・削除・Python 実行ができるディレクトリ。担当に新しく接続するときは確認が要る */
 export const isRiskyDir = (t?: Tool) => t?.kind === 'directory' && RISKY_DIR_PERMS.some((k) => t.perms?.[k]);
-const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind);
+const toolSub = (t: Tool) => (t.kind === 'directory' ? `${t.path ?? ''} · ${permLabels(t.perms).join('・') || '権限なし'}` : t.kind === 'llm' ? `ローカル LLM · ${t.model ?? ''}`
+  : t.kind === 'python' ? `Python · ${t.func ?? 'main'}(${(t.params ?? []).map((p) => p.name).join(', ')})`
+  : t.kind === 'input' ? `入力 · ${t.param ?? ''}: ${t.dtype ?? ''}` : t.kind);
 
 const COL = 270;
 const ROW = 84;
 
 export interface GraphNode { id: string; type: 'entity' | 'tool'; kind: string; label: string; sub: string; protected: boolean; icon?: string | null; x: number; y: number }
-export interface GraphEdge { id: string; type: 'tree' | 'tool'; from: string; to: string }
+export interface GraphEdge { id: string; type: 'tree' | 'tool' | 'input' | 'call'; from: string; to: string }
+/** 担当 → 担当（呼ぶ）のワイヤーに使うピン。親子（左右のピン）とは別に、上下のピンでつなぐ */
+export const CALL_OUT = 'call';
+export const CALL_IN = 'callee';
 
 /** 配置（pos）が無いノードを、親子の深さ × 並び順で自動配置する。ツールは右端の列に並べる。 */
 export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNode[]; edges: GraphEdge[] } {
@@ -69,6 +82,8 @@ export function buildGraph(entities: Entity[], tools: Tool[]): { nodes: GraphNod
     if (e.parent_id && known.has(e.parent_id)) edges.push({ id: `tree:${e.parent_id}>${e.id}`, type: 'tree', from: e.parent_id, to: e.id });
     for (const tid of e.tool_ids || []) if (known.has(tid)) edges.push({ id: `tool:${e.id}>${tid}`, type: 'tool', from: e.id, to: tid });
   }
+  for (const e of entities) for (const cid of e.callee_ids || []) if (known.has(cid)) edges.push({ id: `call:${e.id}>${cid}`, type: 'call', from: e.id, to: cid });
+  for (const t of tools) for (const iid of t.input_ids || []) if (known.has(iid)) edges.push({ id: `input:${iid}>${t.id}`, type: 'input', from: iid, to: t.id });
   return { nodes, edges };
 }
 
@@ -80,13 +95,40 @@ export function isDescendant(entities: Entity[], ancestorId: string, id: string)
   return false;
 }
 
-export type Connect = { ok: false; reason: string } | { ok: true; action: 'reparent'; from: Entity; to: Entity } | { ok: true; action: 'tool'; from: Entity; to: Tool };
+export type Connect = { ok: false; reason: string } | { ok: true; action: 'call'; from: Entity; to: Entity } | { ok: true; action: 'reparent'; from: Entity; to: Entity } | { ok: true; action: 'tool'; from: Entity; to: Tool } | { ok: true; action: 'input'; from: Tool; to: Tool };
 
 /** 出力ピン(from) → 入力ピン(to) の接続可否。ok なら action は 'reparent'（親子）か 'tool'（ツール接続）。 */
-export function canConnect(entities: Entity[], tools: Tool[], fromId: string, toId: string): Connect {
+export function canConnect(entities: Entity[], tools: Tool[], fromId: string, toId: string, handles?: { source?: string | null; target?: string | null }): Connect {
+  const callPin = handles?.source === CALL_OUT || handles?.target === CALL_IN;
+  if (callPin) {   // 上下のピン: 担当が別の担当を呼ぶ（ADR 0043）
+    if (handles?.source !== CALL_OUT || handles?.target !== CALL_IN) return { ok: false, reason: '呼ぶ接続は、下のピン（呼ぶ側）から上のピン（呼ばれる側）へつなぐ' };
+    const caller = entities.find((e) => e.id === fromId), callee = entities.find((e) => e.id === toId);
+    if (!caller || !callee) return { ok: false, reason: '接続先が見つからない' };
+    if (caller.id === callee.id) return { ok: false, reason: '自分自身は呼べない' };
+    if (caller.kind === 'orchestrator' || callee.kind === 'orchestrator') return { ok: false, reason: '猫神さまは、この接続では使えない（委任先一覧で管理する）' };
+    if (caller.definition?.kind !== 'agent-md') return { ok: false, reason: `${caller.name} は定義ファイルがないので、担当を呼べない` };
+    if ((caller.callee_ids || []).includes(callee.id)) return { ok: false, reason: 'すでに接続されている' };
+    const reach = new Set<string>(), stack = [callee.id];   // 呼び先をたどって caller に戻るなら、輪になる
+    while (stack.length) { const n = stack.pop()!; if (!reach.has(n)) { reach.add(n); stack.push(...(entities.find((e) => e.id === n)?.callee_ids || [])); } }
+    if (reach.has(caller.id)) return { ok: false, reason: '呼び合いの輪になるので、つなげない' };
+    return { ok: true, action: 'call', from: caller, to: callee };
+  }
+  const fromTool = tools.find((t) => t.id === fromId);
+  if (fromTool?.kind === 'input') {   // 入力ノード → Python ノード（引数の既定値になる）
+    const py = tools.find((t) => t.id === toId);
+    if (py?.kind !== 'python') return { ok: false, reason: '入力ノードは、Python ノードにだけつなげる' };
+    if ((py.input_ids || []).includes(fromId)) return { ok: false, reason: 'すでに接続されている' };
+    const param = (py.params || []).find((p) => p.name === fromTool.param);
+    if (!param) return { ok: false, reason: `関数 ${py.func} に引数 ${fromTool.param} がない` };
+    if (param.type !== fromTool.dtype) return { ok: false, reason: `型が合わない（入力 ${fromTool.dtype}、引数 ${param.type}）` };
+    const twin = tools.find((t) => (py.input_ids || []).includes(t.id) && t.param === fromTool.param);
+    if (twin) return { ok: false, reason: `引数 ${fromTool.param} には、入力ノード ${twin.name} がすでにつながっている` };
+    return { ok: true, action: 'input', from: fromTool, to: py };
+  }
   const from = entities.find((e) => e.id === fromId);
-  if (!from) return { ok: false, reason: '接続元はエージェント側のノードだけ' };
+  if (!from) return { ok: false, reason: '接続元はエージェント側か、入力ノードだけ' };
   const toTool = tools.find((t) => t.id === toId);
+  if (toTool?.kind === 'input') return { ok: false, reason: '入力ノードは担当にはつなげない（Python ノードにつなぐ）' };
   if (toTool) return (from.tool_ids || []).includes(toId) ? { ok: false, reason: 'すでに接続されている' } : { ok: true, action: 'tool', from, to: toTool };
   const to = entities.find((e) => e.id === toId);
   if (!to) return { ok: false, reason: '接続先が見つからない' };
@@ -94,6 +136,8 @@ export function canConnect(entities: Entity[], tools: Tool[], fromId: string, to
   if (to.protected) return { ok: false, reason: '猫神さまの親は変更できない' };
   if (!PARENT_KINDS[to.kind].includes(from.kind)) return { ok: false, reason: `${to.kind} の親にできない種別: ${from.kind}` };
   if (isDescendant(entities, to.id, from.id)) return { ok: false, reason: '子孫を親にはできない（循環）' };
+  const fit = nestable(entities, to.kind, from, to);
+  if (!fit.ok) return fit;
   if (to.parent_id === from.id) return { ok: false, reason: 'すでに親子になっている' };
   return { ok: true, action: 'reparent', from, to };
 }
@@ -102,4 +146,24 @@ export function canConnect(entities: Entity[], tools: Tool[], fromId: string, to
 export const childKinds = (kind: Kind): Kind[] => (['suborchestrator', 'agent', 'subagent'] as Kind[]).filter((k) => PARENT_KINDS[k].includes(kind));
 
 /** 新規ノードの作成時に選べる親（種別の規則に合うもの） */
-export const parentChoices = (entities: Entity[], kind: Kind): Entity[] => entities.filter((e) => PARENT_KINDS[kind].includes(e.kind));
+export const parentChoices = (entities: Entity[], kind: Kind): Entity[] => entities.filter((e) => PARENT_KINDS[kind].includes(e.kind) && nestable(entities, kind, e, null).ok);
+
+export function depthOf(entities: Entity[], id: string): number {
+  const byId = new Map(entities.map((e) => [e.id, e]));
+  let n = 0;
+  for (let cur = byId.get(id); cur?.parent_id && byId.has(cur.parent_id) && n < 100; cur = byId.get(cur.parent_id)) n++;
+  return n;
+}
+/** id の配下のいちばん深い子までの段数（子がなければ 0） */
+export function heightOf(entities: Entity[], id: string): number {
+  const kids = entities.filter((e) => e.parent_id === id);
+  return kids.length ? 1 + Math.max(...kids.map((k) => heightOf(entities, k.id))) : 0;
+}
+/** child（新規なら null）を parent の下に置けるか。深さと、サブオーケストレーターの入れ子の条件（バックエンドが正。ここは操作中の即時の案内） */
+export function nestable(entities: Entity[], kind: Kind, parent: Entity, child: Entity | null): { ok: true } | { ok: false; reason: string } {
+  if (depthOf(entities, parent.id) + 1 + (child ? heightOf(entities, child.id) : 0) > MAX_DEPTH) return { ok: false, reason: `ツリーは ${MAX_DEPTH} 階層まで` };
+  if (kind === 'suborchestrator' && parent.kind === 'suborchestrator') {
+    for (const e of [parent, child]) if (e && e.definition?.kind !== 'agent-md') return { ok: false, reason: `入れ子にできるのは、定義ファイルのあるサブオーケストレーターだけ（${e.name} にはない）` };
+  }
+  return { ok: true };
+}
