@@ -1,0 +1,38 @@
+{
+  "name": "neko-portal-web",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "猫神さま Portal と Agent Console の画面（Next.js）",
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "dev": "next dev -p 4400 -H ${PORTAL_BIND:-127.0.0.1}",
+    "build": "next build",
+    "start": "next start -p 4400 -H ${PORTAL_BIND:-127.0.0.1}",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.0",
+    "@xyflow/react": "^12.8.0",
+    "next": "~15.5.28",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.20.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.0"
+  },
+  "overrides": {
+    "sharp": "file:./vendor/sharp-stub"
+  }
+}

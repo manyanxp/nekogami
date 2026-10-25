@@ -1,0 +1,37 @@
+{
+  "model": "sonnet",
+  "enableAllProjectMcpServers": true,
+  "permissions": {
+    "allow": [
+      "mcp__microsoft-learn",
+      "WebSearch",
+      "WebFetch",
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit(./reports/**)",
+      "Edit(./research/**)"
+    ],
+    "deny": [
+      "Bash(az * create*)",
+      "Bash(az * delete*)",
+      "Bash(az * update*)",
+      "Bash(az * set*)",
+      "Bash(az deployment*)",
+      "Bash(terraform apply*)",
+      "Bash(terraform destroy*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart":       [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "UserPromptSubmit":   [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "PreToolUse":         [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "PostToolUse":        [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "SubagentStart":      [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "SubagentStop":       [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "Notification":       [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "Stop":               [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "SessionEnd":         [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }]
+  }
+}

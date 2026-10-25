@@ -1,0 +1,67 @@
+# 3 コンテナ構成（ADR 0034）: web（画面）→ api（ポータルの API）/ neko-brain（Agent Console。猫神さまの脳）
+# ブラウザが開くのは web だけ。api と neko-brain はコンテナ間のネットワークにだけ出す
+services:
+  web:
+    build:
+      context: ./web
+      args:   # 中継先はビルド時に固定される（サービス名を変えたらここも）
+        PORTAL_API_URL: http://api:4401
+    ports:
+      # 公開先は BIND_ADDR で切替（既定は自 PC のみ）。複数の PC から使う場合は BIND_ADDR=0.0.0.0
+      #   ログインが有効（ADR 0035）。TLS は付かないので、信頼できない網では前にリバースプロキシを置く
+      - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT:-4400}:4400"
+    environment:
+      - PORTAL_AUTH   # 0 でログイン無効（api にも同じ値を渡す）
+    depends_on: [api]
+    restart: unless-stopped
+
+  api:
+    build: ./portal/backend
+    environment:
+      # ログイン（ADR 0035）。ユーザーが 1 人もいないときだけ、この管理者を作る。作ったら .env からパスワードを消してよい
+      - PORTAL_AUTH
+      - PORTAL_ADMIN_USER
+      - PORTAL_ADMIN_PASSWORD
+      - PORTAL_TOKEN   # 任意。スクリプトから /api を叩く用の Bearer トークン（管理者扱い）。画面のログインとは別
+      - CONSOLE_URL=http://neko-brain:4317
+    volumes:
+      # 台帳・テーマ・アイコン、エージェント定義、猫神さまの設定を読み書きする
+      - ./portal/data:/project/portal/data
+      - ./portal/assets:/project/portal/assets:ro
+      - ./.claude:/project/.claude
+      - ./nekogamisama:/project/nekogamisama
+      - ./.mcp.json:/project/.mcp.json:ro
+    restart: unless-stopped
+
+  neko-brain:
+    build: .
+    environment:
+      # 認証は `docker compose exec neko-brain claude` で /login するか、API キー等を渡す
+      #   export ANTHROPIC_API_KEY=sk-ant-...   （または `claude setup-token` で得た CLAUDE_CODE_OAUTH_TOKEN）
+      - ANTHROPIC_API_KEY
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - CHAT_MODEL
+      - ALLOW_AZURE_MCP
+      # 話しかける相手: 未指定=Azure Sage / nekogamisama=猫神さま。NYA_SUFFIX=トレースの語尾（空で無効）
+      - CHAT_PROJECT_DIR
+      - CHAT_TARGET   # 既定の相手（猫神さまの委任先一覧にある名前）
+      - NYA_SUFFIX
+      # Azure MCP を使う場合（Reader 権限のサービスプリンシパル推奨）
+      - AZURE_TENANT_ID
+      - AZURE_CLIENT_ID
+      - AZURE_CLIENT_SECRET
+    volumes:
+      # `claude` のログイン状態を保持（コンテナを作り直しても維持）
+      - claude-config:/home/node/.claude-config
+      # 成果物をホスト側に残す
+      - ./reports:/app/reports
+      - ./research:/app/research
+      # ポータルの台帳・テーマ（ID 表示とテーマに使う。読み取りのみ）
+      - ./portal/data:/app/portal/data:ro
+      # ポータルで編集したエージェント定義・性格をすぐ反映する
+      - ./.claude/agents:/app/.claude/agents:ro
+      - ./nekogamisama:/app/nekogamisama
+    restart: unless-stopped
+
+volumes:
+  claude-config:

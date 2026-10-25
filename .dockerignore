@@ -1,0 +1,9 @@
+dashboard/node_modules
+web
+.venv
+portal/data
+.git
+docs-screenshot.png
+スクリーンショット*.png
+.claude/settings.local.json
+icons

@@ -1,0 +1,21 @@
+# 実行時のデータ（台帳・テーマ・バックアップ。個人の構成が入る）
+portal/data/
+
+# 調査・提案の成果物（個人的な内容を含みうるのでコミットしない）
+reports/
+research/
+
+# Python / Node
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+web/.next/
+web/next-env.d.ts
+*.tsbuildinfo
+
+# ローカル設定・OS
+.claude/settings.local.json
+.env
+.env.*
+.DS_Store

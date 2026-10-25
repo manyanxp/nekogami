@@ -1,0 +1,12 @@
+{
+  "azure-sage": {
+    "type": "agent",
+    "agent": "azure-architect",
+    "description": "Azure 全般（Foundry / Agent 365 含む）の調査・開発提案"
+  },
+  "news-sub": {
+    "type": "agent",
+    "agent": "news-agent",
+    "description": "日経や海外のニュースを調べるエージェント"
+  }
+}

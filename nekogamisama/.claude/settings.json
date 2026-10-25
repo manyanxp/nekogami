@@ -1,0 +1,30 @@
+{
+  "model": "sonnet",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(bin/delegate.sh *)",
+      "Bash(nekogamisama/bin/delegate.sh *)"
+    ],
+    "deny": [
+      "Bash(az *)",
+      "Bash(terraform *)",
+      "Edit",
+      "Write"
+    ]
+  },
+  "hooks": {
+    "SessionStart":       [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "UserPromptSubmit":   [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "PreToolUse":         [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "PostToolUse":        [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "SubagentStart":      [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "SubagentStop":       [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "Notification":       [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "Stop":               [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }],
+    "SessionEnd":         [{ "hooks": [{ "type": "http", "url": "http://127.0.0.1:4317/hooks", "timeout": 3 }] }]
+  }
+}

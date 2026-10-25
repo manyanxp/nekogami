@@ -1,0 +1,7 @@
+{
+  "name": "sharp",
+  "version": "0.0.0-stub",
+  "description": "next が任意で使う画像最適化ライブラリ sharp の空のスタブ。この画面は next/image を使わない（LGPL の libvips バイナリを入れないため）",
+  "license": "MIT",
+  "main": "index.js"
+}

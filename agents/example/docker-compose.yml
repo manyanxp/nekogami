@@ -1,0 +1,10 @@
+# サンプル: 追加エージェントを Docker コンテナとして置く場合のひな形。
+# ポータルで「ランタイム=docker / compose=agents/example/docker-compose.yml / サービス=example-agent」と登録すると、UI から起動・停止できる。
+# image / command は自分のエージェントに置き換えること（ここでは動作確認用の簡易 HTTP サーバー）。
+services:
+  example-agent:
+    image: python:3.12-slim
+    command: ["python", "-m", "http.server", "8000"]
+    ports:
+      - "127.0.0.1:4500:8000"   # 公開は自 PC のみ
+    restart: "no"
