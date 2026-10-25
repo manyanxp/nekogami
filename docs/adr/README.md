@@ -51,6 +51,7 @@ Azure Sage の設計判断と仕様の記録です。1 ファイル 1 判断、�
 | [0045](0045-python-node-body-only.md) | Python ノードは処理だけを書く（引数は入力ノードから、関数は自動生成） | Accepted |
 | [0046](0046-subagent-personality-file.md) | サブオーケストレーターごとの personality.md（ファイルを正にして、定義へ自動同期） | Accepted |
 | [0047](0047-shared-principles.md) | Shared Principles（サブオーケストレーターから直下の子へ渡す共通プロンプト） | Accepted |
+| [0048](0048-neko-delegation-only-and-theme-sync.md) | 猫神さまは委任だけ、フローのテーマ追従、ポータルの連動 | Accepted |
 
 ## 運用ルール
 

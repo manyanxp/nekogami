@@ -53,3 +53,4 @@
 | 2026-10-25 | [Python ノードを処理だけに、左の列の開閉と線の強調（rev3 更新分）](20261025-46-python-body-and-fold.md) | [0045](../adr/0045-python-node-body-only.md) |
 | 2026-10-25 | [サブオーケストレーターごとの personality.md（rev3 追加分）](20261025-47-subagent-personality-file.md) | [0046](../adr/0046-subagent-personality-file.md) |
 | 2026-10-25 | [Shared Principles — 全エージェント共通指示（rev4）](20261025-48-shared-principles.md) | [0047](../adr/0047-shared-principles.md) |
+| 2026-10-25 | [猫神さまは委任だけ、フローのテーマ追従、ポータルの連動（rev4 追加分）](20261025-49-neko-delegation-only-and-theme-sync.md) | [0048](../adr/0048-neko-delegation-only-and-theme-sync.md) |
